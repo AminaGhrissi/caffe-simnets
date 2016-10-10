@@ -35,8 +35,8 @@ void Blob<Dtype>::Reshape(const vector<int>& shape) {
     shape_[i] = shape[i];
     shape_data[i] = shape[i];
   }
-  if (count_ > capacity_) {
-    capacity_ = count_;
+  if (count_ + padding_ > capacity_) {
+    capacity_ = count_ + padding_;
     data_.reset(new SyncedMemory(capacity_ * sizeof(Dtype)));
     diff_.reset(new SyncedMemory(capacity_ * sizeof(Dtype)));
   }
@@ -58,17 +58,23 @@ void Blob<Dtype>::ReshapeLike(const Blob<Dtype>& other) {
 }
 
 template <typename Dtype>
+void Blob<Dtype>::SetPadding(const unsigned int padding) {
+  padding_ = padding;
+  Reshape(shape_);
+}
+
+template <typename Dtype>
 Blob<Dtype>::Blob(const int num, const int channels, const int height,
     const int width)
   // capacity_ must be initialized before calling Reshape
-  : capacity_(0) {
+  : capacity_(0), padding_(0) {
   Reshape(num, channels, height, width);
 }
 
 template <typename Dtype>
 Blob<Dtype>::Blob(const vector<int>& shape)
   // capacity_ must be initialized before calling Reshape
-  : capacity_(0) {
+  : capacity_(0), padding_(0) {
   Reshape(shape);
 }
 
@@ -135,12 +141,14 @@ Dtype* Blob<Dtype>::mutable_gpu_diff() {
 template <typename Dtype>
 void Blob<Dtype>::ShareData(const Blob& other) {
   CHECK_EQ(count_, other.count());
+  CHECK_LE(padding_, other.padding());
   data_ = other.data();
 }
 
 template <typename Dtype>
 void Blob<Dtype>::ShareDiff(const Blob& other) {
   CHECK_EQ(count_, other.count());
+  CHECK_LE(padding_, other.padding());
   diff_ = other.diff();
 }
 
@@ -173,6 +181,42 @@ void Blob<Dtype>::Update() {
     break;
   default:
     LOG(FATAL) << "Syncedmem not initialized.";
+  }
+}
+  
+template <typename Dtype>
+void Blob<Dtype>::Clip(const Dtype min, const Dtype max) {
+  // We will perform update based on where the data is located.
+  switch (data_->head()) {
+    case SyncedMemory::HEAD_AT_CPU:
+      // perform computation on CPU
+      caffe_cpu_clip_min<Dtype>(count_,
+          static_cast<const Dtype*>(data_->cpu_data()),
+          static_cast<Dtype*>(data_->mutable_cpu_data()),
+          min);
+      caffe_cpu_clip_max<Dtype>(count_,
+          static_cast<const Dtype*>(data_->cpu_data()),
+          static_cast<Dtype*>(data_->mutable_cpu_data()),
+          max);
+      break;
+    case SyncedMemory::HEAD_AT_GPU:
+    case SyncedMemory::SYNCED:
+#ifndef CPU_ONLY
+      // perform computation on GPU
+      caffe_gpu_clip_min<Dtype>(count_,
+          static_cast<const Dtype*>(data_->gpu_data()),
+          static_cast<Dtype*>(data_->mutable_gpu_data()),
+          min);
+      caffe_gpu_clip_max<Dtype>(count_,
+          static_cast<const Dtype*>(data_->gpu_data()),
+          static_cast<Dtype*>(data_->mutable_gpu_data()),
+          max);
+#else
+      NO_GPU;
+#endif
+      break;
+    default:
+      LOG(FATAL) << "Syncedmem not initialized.";
   }
 }
 

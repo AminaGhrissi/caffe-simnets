@@ -24,13 +24,12 @@ template <typename Dtype>
 class Blob {
  public:
   Blob()
-       : data_(), diff_(), count_(0), capacity_(0) {}
+       : data_(), diff_(), count_(0), capacity_(0), padding_(0) {}
 
   /// @brief Deprecated; use <code>Blob(const vector<int>& shape)</code>.
   explicit Blob(const int num, const int channels, const int height,
       const int width);
   explicit Blob(const vector<int>& shape);
-
   /// @brief Deprecated; use <code>Reshape(const vector<int>& shape)</code>.
   void Reshape(const int num, const int channels, const int height,
       const int width);
@@ -73,7 +72,8 @@ class Blob {
   }
   inline int num_axes() const { return shape_.size(); }
   inline int count() const { return count_; }
-
+  inline int padding() const { return padding_; }
+  void SetPadding(const unsigned int padding);
   /**
    * @brief Compute the volume of a slice; i.e., the product of dimensions
    *        among a range of axes.
@@ -227,6 +227,15 @@ class Blob {
   Dtype* mutable_cpu_diff();
   Dtype* mutable_gpu_diff();
   void Update();
+  /**
+   *  @brief Clip all the values to be between min and max.
+   *
+   *  @param min The minimum value to clip the parameters.
+   *  @param max The maximum value to clip the parameters.
+   *
+   *  @remark If either min or max are NaN, then that constraint is not enforced.
+   */
+  void Clip(const Dtype min, const Dtype max);
   void FromProto(const BlobProto& proto, bool reshape = true);
   void ToProto(BlobProto* proto, bool write_diff = false) const;
 
@@ -272,6 +281,7 @@ class Blob {
   vector<int> shape_;
   int count_;
   int capacity_;
+  int padding_;
 
   DISABLE_COPY_AND_ASSIGN(Blob);
 };  // class Blob

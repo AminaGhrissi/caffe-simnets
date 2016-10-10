@@ -82,7 +82,10 @@ class Net {
    */
   void Reshape();
 
-  Dtype ForwardBackward() {
+  Dtype ForwardBackward(const string& stage = "") {
+    for (int i = 0; i < this->layers_.size(); ++i) {
+      this->layers_[i]->set_active_on_off_stage(stage);
+    }
     Dtype loss;
     Forward(&loss);
     Backward();
@@ -91,6 +94,10 @@ class Net {
 
   /// @brief Updates the network weights based on the diff values computed.
   void Update();
+
+  /// @brief Clips the network weights based on its constraints.
+  void Clip();
+
   /**
    * @brief Shares weight data of owner blobs with shared blobs.
    *
@@ -180,6 +187,18 @@ class Net {
   /// @brief returns the learnable parameter learning rate multipliers
   inline const vector<float>& params_lr() const { return params_lr_; }
   inline const vector<bool>& has_params_lr() const { return has_params_lr_; }
+  /// @brief returns the minimum constraint on the parameters.
+  inline vector<Dtype>& params_min() { return params_min_; }
+  /// @brief returns the maximum constraint on the parameters.
+  inline vector<Dtype>& params_max() { return params_max_; }
+  /// @brief returns which parameters are in log-space or linear-space
+  inline const vector<bool>& params_is_logspace() const {
+    return params_is_logspace_;
+  }
+  /// @brief returns list of local regularization types
+  inline const vector<vector<string> >& params_local_reg_type() const {
+    return params_local_reg_type_;
+  }
   /// @brief returns the learnable parameter decay multipliers
   inline const vector<float>& params_weight_decay() const {
     return params_weight_decay_;
@@ -216,6 +235,12 @@ class Net {
 
   void set_debug_info(const bool value) { debug_info_ = value; }
 
+  // Unsupervised init methods:
+  bool needs_unsupervised_init();
+  bool needs_unsupervised_init(const int layer_index);
+  bool init_step(const int layer_index, Dtype* objective);
+  bool init_has_objective(const int layer_index);
+  Dtype test_init_step_objective(const int layer_index);
   // Helpers for Init.
   /**
    * @brief Remove layers that the user specified should be excluded given the current
@@ -298,9 +323,21 @@ class Net {
   /// the learning rate multipliers for learnable_params_
   vector<float> params_lr_;
   vector<bool> has_params_lr_;
+  /// Constraints of the minimum value of a parameter
+  vector<Dtype> params_min_;
+  vector<bool> has_params_min_;
+  /// Constraints of the maximum value of a parameter
+  vector<Dtype> params_max_;
+  vector<bool> has_params_max_;
   /// the weight decay multipliers for learnable_params_
   vector<float> params_weight_decay_;
   vector<bool> has_params_decay_;
+  // whether the parameter is in log-space or not
+  vector<bool> params_is_logspace_;
+  vector<bool> has_params_is_logspace_;
+  // overriding global regularization types
+  vector<vector<string> > params_local_reg_type_;
+  vector<bool> has_params_local_reg_type_;
   /// The bytes of memory used by this net
   size_t memory_used_;
   /// Whether to compute and display debug info for the net.

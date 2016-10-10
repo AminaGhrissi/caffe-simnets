@@ -1,5 +1,6 @@
 #ifdef USE_OPENCV
 #include <opencv2/core/core.hpp>
+#include <opencv2/imgproc/imgproc.hpp>
 #endif  // USE_OPENCV
 
 #include <string>
@@ -252,6 +253,41 @@ void DataTransformer<Dtype>::Transform(const cv::Mat& cv_img,
   CHECK_GE(img_height, crop_size);
   CHECK_GE(img_width, crop_size);
 
+  const int max_rect_size = param_.max_rect_size();
+  const int min_rect_size = param_.min_rect_size();
+  const int max_rect_num = param_.max_rect_num();
+  const int min_rect_num = param_.min_rect_num();
+  CHECK_GE(max_rect_size, min_rect_size);
+  CHECK_GE(min_rect_size, 0);
+  CHECK_LE(max_rect_size, MIN(img_width, img_height));
+  CHECK_GE(max_rect_num, min_rect_num);
+  CHECK_GE(min_rect_num, 0);
+
+  cv::Mat cv_modified_img = cv_img;
+  if (max_rect_size > 0 && max_rect_num > 0) {
+    const int rect_num = min_rect_num + Rand(max_rect_num - min_rect_num + 1);
+    for (int i = 0; i < rect_num; ++i) {
+        const int px1 = Rand(img_width - min_rect_size);
+        const int py1 = Rand(img_height - min_rect_size);
+        const int px2 = px1 + min_rect_size
+                      + Rand(MIN(img_width - px1 - min_rect_size, max_rect_size - min_rect_size + 1) );
+        const int py2 = py1 + min_rect_size
+                      + Rand(MIN(img_height - py1 - min_rect_size, max_rect_size - min_rect_size + 1) );
+        cv::Scalar color;
+        if (img_channels == 3) {
+          const int r = Rand(256);
+          const int g = Rand(256);
+          const int b = Rand(256);
+          color = cv::Scalar(b, g, r);
+        } else if (img_channels == 1) {
+          color = cv::Scalar(Rand(256));
+        } else {
+          LOG(FATAL) << "Unsupported number of channels when using rect drawing augmentation.";
+        }
+        cv::rectangle(cv_modified_img, cv::Point(px1, py1), cv::Point(px2, py2), color, CV_FILLED);
+    }
+  }
+
   Dtype* mean = NULL;
   if (has_mean_file) {
     CHECK_EQ(img_channels, data_mean_.channels());
@@ -272,7 +308,6 @@ void DataTransformer<Dtype>::Transform(const cv::Mat& cv_img,
 
   int h_off = 0;
   int w_off = 0;
-  cv::Mat cv_cropped_img = cv_img;
   if (crop_size) {
     CHECK_EQ(crop_size, height);
     CHECK_EQ(crop_size, width);
@@ -285,18 +320,18 @@ void DataTransformer<Dtype>::Transform(const cv::Mat& cv_img,
       w_off = (img_width - crop_size) / 2;
     }
     cv::Rect roi(w_off, h_off, crop_size, crop_size);
-    cv_cropped_img = cv_img(roi);
+    cv_modified_img = cv_modified_img(roi);
   } else {
     CHECK_EQ(img_height, height);
     CHECK_EQ(img_width, width);
   }
 
-  CHECK(cv_cropped_img.data);
+  CHECK(cv_modified_img.data);
 
   Dtype* transformed_data = transformed_blob->mutable_cpu_data();
   int top_index;
   for (int h = 0; h < height; ++h) {
-    const uchar* ptr = cv_cropped_img.ptr<uchar>(h);
+    const uchar* ptr = cv_modified_img.ptr<uchar>(h);
     int img_index = 0;
     for (int w = 0; w < width; ++w) {
       for (int c = 0; c < img_channels; ++c) {
@@ -522,7 +557,8 @@ vector<int> DataTransformer<Dtype>::InferBlobShape(
 template <typename Dtype>
 void DataTransformer<Dtype>::InitRand() {
   const bool needs_rand = param_.mirror() ||
-      (phase_ == TRAIN && param_.crop_size());
+      (phase_ == TRAIN && param_.crop_size()) ||
+      (param_.max_rect_size() > 0 && param_.max_rect_num() > 0);
   if (needs_rand) {
     const unsigned int rng_seed = caffe_rng_rand();
     rng_.reset(new Caffe::RNG(rng_seed));

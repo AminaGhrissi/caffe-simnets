@@ -7,6 +7,7 @@
 #include "caffe/layer.hpp"
 #include "caffe/proto/caffe.pb.h"
 #include "caffe/util/im2col.hpp"
+#include "caffe/util/unsupervised_learner.hpp"
 
 namespace caffe {
 
@@ -27,8 +28,11 @@ class BaseConvolutionLayer : public Layer<Dtype> {
   virtual inline int MinBottomBlobs() const { return 1; }
   virtual inline int MinTopBlobs() const { return 1; }
   virtual inline bool EqualNumBottomTopBlobs() const { return true; }
-
+  virtual bool needs_unsupervised_init();
  protected:
+  // Methods for unsupervised initialization
+  virtual Dtype test_init_step_objective_cpu(const vector<Blob<Dtype>*>& bottom);
+  virtual bool init_step_cpu(const vector<Blob<Dtype>*>& bottom, Dtype* objective);
   // Helper functions that abstract away the column buffer and gemm arguments.
   // The last argument in forward_cpu_gemm is so that we can skip the im2col if
   // we just called weight_cpu_gemm with the same input.
@@ -50,6 +54,9 @@ class BaseConvolutionLayer : public Layer<Dtype> {
   void weight_gpu_gemm(const Dtype* col_input, const Dtype* output, Dtype*
       weights);
   void backward_gpu_bias(Dtype* bias, const Dtype* input);
+  // Methods for unsupervised initialization
+  virtual Dtype test_init_step_objective_gpu(const vector<Blob<Dtype>*>& bottom);
+  virtual bool init_step_gpu(const vector<Blob<Dtype>*>& bottom, Dtype* objective);
 #endif
 
   /// @brief The spatial dimensions of the input.
@@ -92,6 +99,17 @@ class BaseConvolutionLayer : public Layer<Dtype> {
   bool bias_term_;
   bool is_1x1_;
   bool force_nd_im2col_;
+
+  // Have the parameters been initialized?
+  bool param_initialized_;
+  // For unsupervised initialization
+  shared_ptr<UnsupervisedLearner<Dtype> > unsupervised_learner_;
+  vector<shared_ptr<Blob<Dtype> > > input_for_learner_;
+  // Variables for applying normalization on patches
+  bool normalize_patches_;
+  Dtype normalization_fudge_factor_;
+  bool normalize_variance_;
+  Blob<Dtype> row_buffer_;
 
  private:
   // wrap im2col/col2im so we don't have to remember the (long) argument lists

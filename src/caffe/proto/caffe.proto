@@ -59,6 +59,24 @@ message FillerParameter {
     AVERAGE = 2;
   }
   optional VarianceNorm variance_norm = 8 [default = FAN_IN];
+  // If positive defines the primal dimension used in PositiveUnitball and Dirichlet
+  optional int32 primal_dim = 9 [default = -1];
+  // How much of primal dim is initialized. If negative same as primal_dim.
+  optional int32 filled_size = 14 [default = -1];
+  optional float alpha = 10 [default = 1]; // Used for gamma / dirichlet distributions
+  optional bool to_log = 11 [default = false]; // Change parameters to log-space
+  optional float fudge_factor = 12 [default = 1e-8]; // fudge factor for numeric operations
+  optional int32 cyclic_length = 13 [default = -1]; // The length of the cycle for placing indicators.
+  optional float non_zero_probability = 15 [default = 0.5]; // The probability for bernulli filler.
+  optional bool use_range = 16 [default = false]; // Select non-zero-probability at random over
+  // uniform distibution between min and max.
+  // Parameters to define 'rects' filler.
+  // [min_rects,max_rects] rects will be generated, number sampled from uniform distribution.
+  optional int32 min_rects = 17 [default = 0];
+  optional int32 max_rects = 18 [default = 0];
+  //  Each rect will be of size bxb, b randomly selected from [min_width,max_width] (also uniform)
+  optional int32 min_width = 19 [default = 0];
+  optional int32 max_width = 20 [default = 0];
 }
 
 message NetParameter {
@@ -98,7 +116,7 @@ message NetParameter {
 // NOTE
 // Update the next available ID when you add a new SolverParameter field.
 //
-// SolverParameter next available ID: 41 (last added: type)
+// SolverParameter next available ID: 48 (last added: on_off_stage_iter)
 message SolverParameter {
   //////////////////////////////////////////////////////////////////////////////
   // Specifying the train and test networks
@@ -140,6 +158,11 @@ message SolverParameter {
 
   // The number of iterations between two testing phases.
   optional int32 test_interval = 4 [default = 0];
+  // The number of iterations for unsupervised initialization
+  optional int32 init_test_iter = 41 [default = 0];
+  // The number of iterations between two testing phases for unsupervised initialization.
+  optional int32 init_test_interval = 42 [default = 0];
+  
   optional bool test_compute_loss = 19 [default = false];
   // If true, run an initial test pass before the first iteration,
   // ensuring memory availability and printing the starting value of the loss.
@@ -181,7 +204,8 @@ message SolverParameter {
   optional int32 stepsize = 13;
   // the stepsize for learning rate policy "multistep"
   repeated int32 stepvalue = 34;
-
+  repeated float step_lr = 44;
+  repeated string step_policy = 45;
   // Set clip_gradients to >= 0 to clip parameter gradients to that L2 norm,
   // whenever their actual L2 norm is larger.
   optional float clip_gradients = 35 [default = -1];
@@ -224,7 +248,7 @@ message SolverParameter {
   // If true, print information about the state of the net that may help with
   // debugging learning problems.
   optional bool debug_info = 23 [default = false];
-
+  optional bool debug_info_test_nets = 43 [default = false];
   // If false, don't save a snapshot after training finishes.
   optional bool snapshot_after_train = 28 [default = true];
 
@@ -239,6 +263,12 @@ message SolverParameter {
   }
   // DEPRECATED: use type instead of solver_type
   optional SolverType solver_type = 30 [default = SGD];
+
+  // Specify the cycle of training stages and how many iterations to use
+  // for each stage. During a stage, only the layers belonging to the stage,
+  // or layers belonging to all stages, contribute to the parameter gradients.
+  repeated string on_off_stage_name = 46;
+  repeated uint32 on_off_stage_iter = 47;
 }
 
 // A message that stores the solver snapshots
@@ -247,6 +277,8 @@ message SolverState {
   optional string learned_net = 2; // The file that stores the learned net.
   repeated BlobProto history = 3; // The history for sgd solvers
   optional int32 current_step = 4 [default = 0]; // The current step for learning rate
+  optional int32 current_stage_iter = 5 [default = 0];
+  optional int32 current_stage_idx = 6 [default = 0];
 }
 
 enum Phase {
@@ -301,12 +333,24 @@ message ParamSpec {
 
   // The multiplier on the global weight decay for this parameter.
   optional float decay_mult = 4 [default = 1.0];
+
+  // The minimum value of the parameter. Clipped after each step of the solver
+  optional float min_value = 5 [default = nan];
+
+  // The maximum value of the parameter. Clipped after each step of the solver
+  optional float max_value = 6 [default = nan];
+
+  // Is the parameter saved in log-space?
+  optional bool is_logspace = 7 [default = false];
+
+  // Override global regularization
+  repeated string regularization_type = 8;
 }
 
 // NOTE
 // Update the next available ID when you add a new LayerParameter field.
 //
-// LayerParameter next available layer-specific ID: 145 (last added: crop_param)
+// LayerParameter next available layer-specific ID: 156 (last added: permutation_param)
 message LayerParameter {
   optional string name = 1; // the layer name
   optional string type = 2; // the layer type
@@ -336,6 +380,10 @@ message LayerParameter {
   //
   // The size must be either 0 or equal to the number of bottoms.
   repeated bool propagate_down = 11;
+
+  // Specify the stage during which this layer should contribute to the 
+  // gradient computed during backprob. If empty the layer always contributes.
+  optional string on_off_stage = 153 [default = ""];
 
   // Rules controlling whether and when a layer is included in the network,
   // based on the current NetState.  You may specify a non-zero number of rules
@@ -377,14 +425,20 @@ message LayerParameter {
   optional HDF5DataParameter hdf5_data_param = 112;
   optional HDF5OutputParameter hdf5_output_param = 113;
   optional HingeLossParameter hinge_loss_param = 114;
+  optional GeneralizedHingeLossParameter generalized_hinge_loss_param = 151;
   optional ImageDataParameter image_data_param = 115;
   optional InfogainLossParameter infogain_loss_param = 116;
   optional InnerProductParameter inner_product_param = 117;
   optional InputParameter input_param = 143;
   optional LogParameter log_param = 134;
+  optional LogLikelihoodLossParameter log_likelihood_loss_param = 150;
   optional LRNParameter lrn_param = 118;
   optional MemoryDataParameter memory_data_param = 119;
+  optional MEXParameter mex_param = 147;
   optional MVNParameter mvn_param = 120;
+  repeated NoiseParameter noise_param = 148;
+  optional OneHotParameter one_hot_param = 152;
+  optional PermutationParameter permutation_param = 155;
   optional PoolingParameter pooling_param = 121;
   optional PowerParameter power_param = 122;
   optional PReLUParameter prelu_param = 131;
@@ -394,12 +448,15 @@ message LayerParameter {
   optional ReshapeParameter reshape_param = 133;
   optional ScaleParameter scale_param = 142;
   optional SigmoidParameter sigmoid_param = 124;
+  optional SimilarityParameter similarity_param = 145;
   optional SoftmaxParameter softmax_param = 125;
   optional SPPParameter spp_param = 132;
   optional SliceParameter slice_param = 126;
+  optional SumLossParameter sum_loss_param = 149;
   optional TanHParameter tanh_param = 127;
   optional ThresholdParameter threshold_param = 128;
   optional TileParameter tile_param = 138;
+  optional TranslationParameter translation_param = 154;
   optional WindowDataParameter window_data_param = 129;
 }
 
@@ -424,6 +481,11 @@ message TransformationParameter {
   optional bool force_color = 6 [default = false];
   // Force the decoded image to have 1 color channels.
   optional bool force_gray = 7 [default = false];
+  // 
+  optional uint32 max_rect_size = 8 [default = 0];
+  optional uint32 min_rect_size = 9 [default = 0];
+  optional uint32 max_rect_num = 10 [default = 0];
+  optional uint32 min_rect_num = 11 [default = 0];
 }
 
 // Message that stores parameters shared by loss layers
@@ -555,6 +617,7 @@ message ConvolutionParameter {
   optional uint32 num_output = 1; // The number of outputs for the layer
   optional bool bias_term = 2 [default = true]; // whether to have bias terms
 
+
   // Pad, kernel size, and stride are all given as a single value for equal
   // dimensions in all spatial dimensions, or once per spatial dimension.
   repeated uint32 pad = 3; // The padding size; defaults to 0
@@ -602,6 +665,14 @@ message ConvolutionParameter {
   // implementation; for input blobs with num_axes != 2, this option is
   // ignored and the ND implementation will be used.)
   optional bool force_nd_im2col = 17 [default = false];
+  optional UnsupervisedInitialization unsupervised_init = 19;
+  optional bool normalize_patches = 20 [default = false];
+  // Default value taken from Coates at el. An Analysis of Single Layer Networks in Unsupervised Features Learning
+  optional float normalization_fudge_factor = 21 [default = 0.1];
+  optional bool normalize_variance = 22 [default = true];
+  optional bool normalization_term = 23 [default = false];
+  // For use in the Deconvolution layer, to round up output dimensions (default is rounding down)
+  optional bool round_up_output_dims = 24 [default = false];
 }
 
 message CropParameter {
@@ -794,6 +865,7 @@ message ImageDataParameter {
   // data.
   optional bool mirror = 6 [default = false];
   optional string root_folder = 12 [default = ""];
+  optional bool cache_images = 13 [default = false];
 }
 
 message InfogainLossParameter {
@@ -873,11 +945,26 @@ message MVNParameter {
   optional float eps = 3 [default = 1e-9];
 }
 
+message PermutationParameter {
+  enum PermutationType {
+    QUAD2 = 0; // Permutation over quadrants- each 2x2 window contains
+    // a pixel and its horizontal, vertical and diagonal reflections. 
+    GEN = 1; // Generic permutation according to a string defining the source of each
+    // of the destination locations (spatial dimensions only!). For example,
+    // "1,3,2,0" means send 1 to location 0, 3 to loc. 1, 2 to loc. 2, etc.
+  }
+  optional PermutationType type = 1 [default = QUAD2];
+  optional string permute_string = 2; // for use in GEN permutation
+
+}
+
 message PoolingParameter {
   enum PoolMethod {
     MAX = 0;
     AVE = 1;
     STOCHASTIC = 2;
+    SUM = 3;
+    PROD = 4;
   }
   optional PoolMethod pool = 1 [default = MAX]; // The pooling method
   // Pad, kernel size, and stride are all given as a single value for equal
@@ -1176,6 +1263,22 @@ message SPPParameter {
   optional Engine engine = 6 [default = DEFAULT];
 }
 
+message UnsupervisedInitialization {
+  optional string type = 1 [default = 'none']; // so far only 'none' and 'kmeans' are supported.
+  optional int32 max_iterations = 2 [default = 100]; // maximum number of iterations the algorithm will run.
+  optional int32 num_batches = 3 [default = 1]; // Assumes there are at least a 1000 examples in the dataset.
+  optional float prob_choose_centroid = 4 [default = 1.0]; // The probability to choose an example for centroids initialization
+  optional bool use_kmeans_plus_plus = 5 [default = false]; // By default use kmeans++ initialization. -- at the moment turned off, since not working so well
+  optional bool use_centroids_variance = 6 [default = false]; // Use the point-wise variance of the cluster to initialize the weights of similarity.
+  optional bool apply_whitening = 7 [default = true]; // If true calculate the whitening transform instead of regular PCA.
+  // Default value taken from Coates at el. An Analysis of Single Layer Networks in Unsupervised Features Learning
+  optional float fudge_factor = 8 [default = 0.1];
+  optional bool soft_kmeans = 9 [default = false]; // Use EM with identity covariance matrix
+  optional bool zca_whitening = 10 [default = false]; // Use the ZCA variant of whitening matrix
+  optional bool soft_assignment = 11 [default = true];
+  optional float labeling_density_lambda = 12 [default = 0]; // controls regularization
+}
+
 // DEPRECATED: use LayerParameter.
 message V1LayerParameter {
   repeated string bottom = 2;
@@ -1371,4 +1474,131 @@ message PReLUParameter {
   optional FillerParameter filler = 1;
   // Whether or not slope paramters are shared across channels.
   optional bool channel_shared = 2 [default = false];
+}
+
+message GeneralizedHingeLossParameter {
+  optional float epsilon = 1 [default = 1];
+  optional float margin = 2 [default = 1];
+  optional bool silently_ignore_label_backprop = 3 [default = false];
+  optional bool ignore_labeled_data = 4 [default = false];
+}
+
+// Message that stores parameters used by SumLossLayer
+message SumLossParameter {
+  optional bool use_labeled_data = 1 [default = true];
+}
+// Message that stores parameters used by SumLossLayer
+message LogLikelihoodLossParameter {
+  optional bool use_labeled_data = 1 [default = true];
+  optional bool maximize_likelihood = 2 [default = true]; // If false minimize the likelihood
+  optional bool filter_selected_labels = 3 [default = false]; // If true use loss only on selected
+  optional int32 selected_label = 4;
+}
+
+// Message that stores parameters used by NoiseLayer
+message NoiseParameter {
+  optional FillerParameter add_noise_filler = 1; // additive_noise_filler
+  optional FillerParameter mul_noise_filler = 2; // multiplicative_noise_filler
+  optional bool force_random = 3 [default = false]; // When true, apply random behavior even under test phase
+  optional bool offset_add_mean = 4 [default = false]; // offset the mean so at test-time we simply copy the input.
+  optional bool offset_mul_mean = 5 [default = false]; // offset the mean so at test-time we simply copy the input.
+}
+
+message BlockParameter {
+  optional uint32 block_size = 1; // The kernel size (square)
+  optional uint32 block_h = 2; // The kernel height
+  optional uint32 block_w = 3; // The kernel width
+  optional int32 block_c = 4 [default = -1]; // the block channels depth. -1 means full channel.
+  optional uint32 stride = 5 [default = 1]; // The stride (equal in Y, X)
+  optional uint32 stride_h = 6; // The stride height
+  optional uint32 stride_w = 7; // The stride width
+  optional int32 stride_c = 8 [default = -1]; // The stride width. -1 matches block_c.
+  optional uint32 pad = 9 [default = 0]; // The padding size (equal in Y, X)
+  optional uint32 pad_h = 10 [default = 0]; // The padding height
+  optional uint32 pad_w = 11 [default = 0]; // The padding width
+  optional uint32 pad_c = 12 [default = 0]; // The padding channel
+  optional bool round_down = 13 [default = true]; // Divid to blocks by rounding down/up
+  optional float out_of_bounds_value = 14 [default = 0]; // Filler value to use for out-of-bound indices
+}
+
+message SimilarityParameter {
+  enum SimilarityFunction {
+    CONVOLUTION = 0;
+    L1 = 1;
+    L2 = 2;
+  }
+  optional SimilarityFunction similarity_function = 1 [default = L2];
+  optional uint32 num_instances = 2; // The number of outputs for the layer
+  optional bool bias_term = 3 [default = false]; // whether to have bias terms
+  optional BlockParameter block_param = 4;   // Block configuration as defined above.
+  optional FillerParameter template_filler = 5; // The filler for the template
+  optional FillerParameter bias_filler = 6; // The filler for the bias
+  optional FillerParameter weight_filler = 7; // The filler for the weight
+  optional UnsupervisedInitialization unsupervised_init = 9;
+  optional bool normalization_term = 13 [default = false];
+  optional float normalization_term_fudge = 14 [default = 0.001];
+  optional bool normalize_patches = 15 [default = false];
+  // Default value taken from Coates at el. An Analysis of Single Layer Networks in Unsupervised Features Learning
+  optional float normalization_fudge_factor = 16 [default = 0.1];
+  optional bool normalize_variance = 17 [default = true];
+  optional bool use_log_space_weight_param = 18 [default = false];
+  optional bool ignore_nan_input = 19 [default = false];
+}
+
+message MEXParameter {
+  // The number of instances of the layer.
+  optional uint32 num_instances = 1 [default = 1];
+  // Block configuration as defined above.
+  optional BlockParameter block_param = 2;
+  // The 2D region in which offsets are shared.
+  // -1 means shared over the entire 2D image.
+  optional int32 shared_offsets_region_size = 3 [default = -1];
+  // The height of the 2D region in which offsets are shared.
+  optional int32 shared_offsets_region_h = 4;
+  // The width of the 2D region in which offsets are shared.
+  optional int32 shared_offsets_region_w = 5;
+  // The depth of the 2D region in which offsets are shared.
+  // -1 means shared over the entire channel dimension.
+  optional int32 shared_offsets_region_c = 6 [default = -1];
+  // Alternative to defining a shared region, unshared region
+  optional bool use_unshared_regions = 24 [default = false];
+  // The 2D region in which offsets are unshared.
+  // -1 means unshared over the entire 2D image.
+  optional int32 unshared_offsets_region_size = 25 [default = -1];
+  // The height of the 2D region in which offsets are unshared.
+  optional int32 unshared_offsets_region_h = 26;
+  // The width of the 2D region in which offsets are unshared.
+  optional int32 unshared_offsets_region_w = 27;
+  // The depth of the 2D region in which offsets are unshared.
+  // -1 means unshared over the entire channel dimension.
+  optional int32 unshared_offsets_region_c = 28 [default = -1];
+  optional FillerParameter epsilon_filler = 7; // The filler for the template
+  optional FillerParameter offsets_filler = 8; // The filler for the bias
+  optional bool normalize_patches = 9 [default = false];
+  // Default value taken from Coates at el. An Analysis of Single Layer Networks in Unsupervised Features Learning
+  optional float normalization_fudge_factor = 10 [default = 0.1];
+  optional bool normalize_variance = 11 [default = true];
+  optional bool normalize_offsets = 12 [default = false];
+  optional bool normalize_offsets_projected = 13 [default = false];
+  optional bool softmax_mode = 14 [default = false];
+  optional UnsupervisedInitialization unsupervised_init = 15;
+  optional bool use_log_space_parameters = 22 [default = true];
+  optional float linear_space_min_value = 23 [default = 1e-8];
+  optional float maximum_entropy_regularization_coeff = 29 [default = 0.0];
+}
+
+message OneHotParameter {
+  optional uint32 input_dim = 1;
+  optional bool to_log = 2 [default = false];
+}
+
+message TranslationParameter {
+  // If random then maximum absolute shift at training time (must be non-negative),
+  // otherwise precise constant shift (could be negative).
+  optional int32 shift_x = 1 [default = 0];
+  optional int32 shift_y = 2 [default = 0];
+  // Filler value to use for out-of-bound indices
+  optional float out_of_bounds_value = 3 [default = 0];
+  // Whether random or not.
+  optional bool random = 4 [default = false];
 }

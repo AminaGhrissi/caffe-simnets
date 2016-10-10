@@ -46,7 +46,7 @@ class Solver {
   void Init(const SolverParameter& param);
   void InitTrainNet();
   void InitTestNets();
-
+  void UnsupervisedInit();
   // Client of the Solver optionally may call this in order to set the function
   // that the solver uses to see what action it should take (e.g. snapshot or
   // exit training early).
@@ -117,6 +117,10 @@ class Solver {
   vector<Callback*> callbacks_;
   vector<Dtype> losses_;
   Dtype smoothed_loss_;
+  int current_stage_idx_;
+  int current_stage_iter_;
+  vector<string> on_off_stage_name_;
+  vector<int> on_off_stage_iter_;
 
   // The root solver that holds root nets (actually containing shared layers)
   // in data parallelism

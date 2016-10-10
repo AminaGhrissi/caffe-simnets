@@ -509,4 +509,174 @@ template void col2im_nd_gpu<double>(const double* data_col,
     const int* kernel_shape, const int* pad, const int* stride,
     const int* dilation, double* data_im);
 
+// 3D Convolutions
+
+template <typename Dtype>
+__global__ void im2col_3d_gpu_kernel(const int n, const Dtype* data_im,
+const int channels, const int height, const int width,
+const int patch_c, const int patch_h, const int patch_w,
+const int pad_c, const int pad_h, const int pad_w,
+const int stride_c, const int stride_h, const int stride_w,
+const int channels_col, const int height_col, const int width_col,
+const Dtype out_of_bounds_value,
+Dtype* data_col) {
+  CUDA_KERNEL_LOOP(index, n) {
+    int w_out = index % width_col;
+    int h_index = index / width_col;
+    int h_out = h_index % height_col;
+    int c_index = h_index / height_col;
+    int c_out = c_index % channels_col;
+    int c_offset = c_index / channels_col;
+    
+    int c_patch_out = c_offset * patch_h * patch_w;
+    
+    int h_in = h_out * stride_h - pad_h;
+    int w_in = w_out * stride_w - pad_w;
+    int c_in = c_out * stride_c - pad_c;
+    
+    int c = c_in + c_offset;
+    
+    Dtype* data_col_ptr = data_col;
+    data_col_ptr += ((c_patch_out * channels_col + c_out) * height_col + h_out) * width_col + w_out;
+    const Dtype* data_im_ptr = data_im;
+    data_im_ptr += (c * height + h_in) * width + w_in;
+    for (int i = 0; i < patch_h; ++i) {
+      for (int j = 0; j < patch_w; ++j) {
+        int h = h_in + i;
+        int w = w_in + j;
+        *data_col_ptr = (h >= 0 && w >= 0 && h < height && w < width && c >= 0 && c < channels) ?
+        data_im_ptr[i * width + j] : out_of_bounds_value;
+        data_col_ptr += channels_col * height_col * width_col;
+      }
+    }
+  }
+}
+
+template <typename Dtype>
+void im2col_3d_gpu(const Dtype* data_im,
+const int channels, const int height, const int width,
+const int patch_c, const int patch_h, const int patch_w,
+const int pad_c, const int pad_h, const int pad_w,
+const int stride_c, const int stride_h, const int stride_w,
+Dtype* data_col,
+const bool round_down, const Dtype out_of_bounds_value) {
+  // We are going to launch channels * height_col * width_col patchs, each
+  // patch responsible for copying a single-channel grid.
+  int height_col = dimension_out_size(height, pad_h, patch_h, stride_h, round_down);
+  int width_col = dimension_out_size(width, pad_w, patch_w, stride_w, round_down);
+  int channels_col = dimension_out_size(channels, pad_c, patch_c, stride_c, round_down);
+  int num_kernels = patch_c * channels_col * height_col * width_col;
+  // NOLINT_NEXT_LINE(whitespace/operators)
+  im2col_3d_gpu_kernel<Dtype><<<CAFFE_GET_BLOCKS(num_kernels),CAFFE_CUDA_NUM_THREADS>>>(
+  num_kernels, data_im,
+  channels, height, width,
+  patch_c, patch_h, patch_w,
+  pad_c, pad_h, pad_w,
+  stride_c, stride_h, stride_w,
+  channels_col, height_col, width_col,
+  out_of_bounds_value,
+  data_col);
+  CUDA_POST_KERNEL_CHECK;
+}
+
+template void im2col_3d_gpu(const float* data_im,
+const int channels, const int height, const int width,
+const int patch_c, const int patch_h, const int patch_w,
+const int pad_c, const int pad_h, const int pad_w,
+const int stride_c, const int stride_h, const int stride_w,
+float* data_col, const bool round_down, const float out_of_bounds_value);
+template void im2col_3d_gpu(const double* data_im,
+const int channels, const int height, const int width,
+const int patch_c, const int patch_h, const int patch_w,
+const int pad_c, const int pad_h, const int pad_w,
+const int stride_c, const int stride_h, const int stride_w,
+double* data_col, const bool round_down, const double out_of_bounds_value);
+
+template <typename Dtype>
+__global__ void col2im_3d_gpu_kernel(const int n, const Dtype* data_col,
+const int channels, const int height, const int width,
+const int patch_c, const int patch_h, const int patch_w,
+const int pad_c, const int pad_h, const int pad_w,
+const int stride_c, const int stride_h, const int stride_w,
+const int channels_col, const int height_col, const int width_col,
+Dtype* data_im) {
+  CUDA_KERNEL_LOOP(index, n) {
+    Dtype val = 0;
+    int w = index % width + pad_w;
+    int h = (index / width) % height + pad_h;
+    int c = index / (width * height) + pad_c;
+    // compute the start and end of the output
+    int w_col_start = (w < patch_w) ? 0 : (w - patch_w) / stride_w + 1;
+    int w_col_end = min(w / stride_w + 1, width_col);
+    int h_col_start = (h < patch_h) ? 0 : (h - patch_h) / stride_h + 1;
+    int h_col_end = min(h / stride_h + 1, height_col);
+    int c_col_start = (c < patch_c) ? 0 : (c - patch_c) / stride_c + 1;
+    int c_col_end = min(c / stride_c + 1, channels_col);
+    /*
+     for (int c_col = c_col_start; c_col < c_col_end; ++c_col) {
+     for (int h_col = h_col_start; h_col < h_col_end; ++h_col) {
+     for (int w_col = w_col_start; w_col < w_col_end; ++w_col) {
+     // the col location: [c * width * height + h_out, w_out]
+     int p_col = (c - c_col * strid_c) * patch_h * patch_w
+     + (h - h_col * stride_h) * patch_w
+     + (w - w_col * stride_w);
+     val += data_col[((p_col * channels_col + c_col) * height_col + h_col) * width_col + w_col];
+     }
+     }
+     }
+     */
+    // equivalent implementation
+    int offset =
+    (c * patch_h * patch_w + h * patch_w + w) * channels_col * height_col * width_col;
+    int coeff_c_col = (1 - stride_c * patch_h * patch_w * channels_col) * height_col * width_col;
+    int coeff_h_col = (1 - stride_h * patch_w * channels_col * height_col) * width_col;
+    int coeff_w_col = (1 - stride_w * channels_col * height_col * width_col);
+    for (int c_col = c_col_start; c_col < c_col_end; ++c_col) {
+      for (int h_col = h_col_start; h_col < h_col_end; ++h_col) {
+        for (int w_col = w_col_start; w_col < w_col_end; ++w_col) {
+          val += data_col[offset + c_col * coeff_c_col + h_col * coeff_h_col + w_col * coeff_w_col];
+        }
+      }
+    }
+    data_im[index] = val;
+  }
+}
+
+template <typename Dtype>
+void col2im_3d_gpu(const Dtype* data_col,
+const int channels, const int height, const int width,
+const int patch_c, const int patch_h, const int patch_w,
+const int pad_c, const int pad_h, const int pad_w,
+const int stride_c, const int stride_h, const int stride_w,
+Dtype* data_im, const bool round_down) {
+  int height_col = dimension_out_size(height, pad_h, patch_h, stride_h, round_down);
+  int width_col = dimension_out_size(width, pad_w, patch_w, stride_w, round_down);
+  int channels_col = dimension_out_size(channels, pad_c, patch_c, stride_c, round_down);
+  int num_kernels = channels * height * width;
+  // To avoid involving atomic operations, we will launch one patch per
+  // bottom dimension, and then in the patch add up the top dimensions.
+  // NOLINT_NEXT_LINE(whitespace/operators)
+  col2im_3d_gpu_kernel<Dtype><<<CAFFE_GET_BLOCKS(num_kernels), CAFFE_CUDA_NUM_THREADS>>>(
+  num_kernels, data_col,
+  channels, height, width,
+  patch_c, patch_h, patch_w,
+  pad_c, pad_h, pad_w,
+  stride_c, stride_h, stride_w,
+  channels_col, height_col, width_col,
+  data_im);
+  CUDA_POST_KERNEL_CHECK;
+}
+
+template void col2im_3d_gpu(const float* data_col,
+const int channels, const int height, const int width,
+const int patch_c, const int patch_h, const int patch_w,
+const int pad_c, const int pad_h, const int pad_w,
+const int stride_c, const int stride_h, const int stride_w,
+float* data_im, const bool round_down);
+template void col2im_3d_gpu(const double* data_col,
+const int channels, const int height, const int width,
+const int patch_c, const int patch_h, const int patch_w,
+const int pad_c, const int pad_h, const int pad_w,
+const int stride_c, const int stride_h, const int stride_w,
+double* data_im, const bool round_down);
 }  // namespace caffe

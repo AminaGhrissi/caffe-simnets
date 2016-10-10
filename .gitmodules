@@ -1,0 +1,4 @@
+[submodule "deps/maps"]
+	path = deps/maps
+	url = https://github.com/HUJI-Deep/MAPS.git
+	branch = dimension-ordering

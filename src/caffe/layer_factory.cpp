@@ -8,6 +8,7 @@
 #include "caffe/layer.hpp"
 #include "caffe/layer_factory.hpp"
 #include "caffe/layers/conv_layer.hpp"
+#include "caffe/layers/similarity_layer.hpp"
 #include "caffe/layers/lrn_layer.hpp"
 #include "caffe/layers/pooling_layer.hpp"
 #include "caffe/layers/relu_layer.hpp"
@@ -71,6 +72,25 @@ shared_ptr<Layer<Dtype> > GetConvolutionLayer(
 }
 
 REGISTER_LAYER_CREATOR(Convolution, GetConvolutionLayer);
+
+
+// Get convolution layer according to engine.
+template <typename Dtype>
+shared_ptr<Layer<Dtype> > GetSimilarityLayer(const LayerParameter& param) {
+  SimilarityParameter_SimilarityFunction similarity_function =
+  param.similarity_param().similarity_function();
+  switch (similarity_function) {
+    case SimilarityParameter_SimilarityFunction_L1:
+    case SimilarityParameter_SimilarityFunction_L2:
+    case SimilarityParameter_SimilarityFunction_CONVOLUTION:
+      break;
+    default:
+      LOG(FATAL) << "Layer " << param.name() << " has unknown similarity function.";
+  }
+  return shared_ptr<Layer<Dtype> >(new SimilarityLayer<Dtype>(param));
+}
+
+REGISTER_LAYER_CREATOR(Similarity, GetSimilarityLayer);
 
 // Get pooling layer according to engine.
 template <typename Dtype>

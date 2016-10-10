@@ -41,6 +41,7 @@ class Layer {
     : layer_param_(param), is_shared_(false) {
       // Set phase and copy blobs (if there are any).
       phase_ = param.phase();
+      on_off_stage_ = param.on_off_stage();
       if (layer_param_.blobs_size() > 0) {
         blobs_.resize(layer_param_.blobs_size());
         for (int i = 0; i < layer_param_.blobs_size(); ++i) {
@@ -150,6 +151,37 @@ class Layer {
    */
   inline Dtype Forward(const vector<Blob<Dtype>*>& bottom,
       const vector<Blob<Dtype>*>& top);
+  
+  /**
+   * @brief Given the bottom blobs, perform the initialization step, and returns if more are needed.
+   *
+   * @param bottom
+   *     the input blobs, whose data fields store the input data for this layer
+   * \return The total loss from the layer.
+   *
+   * The init_step wrapper calls the relevant device wrapper function
+   * (init_step_cpu or init_step_gpu) to perform the initialization of the layer.
+   *
+   * Your layer should implement init_step_cpu and (optionally) init_step_gpu if unsupervised
+   * initialization is supported by the layer.
+   */
+  inline bool init_step(const vector<Blob<Dtype>*>& bottom, Dtype* objective);
+
+  /**
+   * @brief Given the bottom blobs, return the current objetive of the initialization step
+   *        for the given batch.
+   *
+   * @param bottom
+   *     the input blobs, whose data fields store the input data for this layer
+   * \return The total loss from the layer.
+   *
+   * The init_step wrapper calls the relevant device wrapper function
+   * (test_init_step_objective_cpu or test_init_step_objective_gpu) to perform the initialization of the layer.
+   *
+   * Your layer should implement test_init_step_objective_cpu and (optionally) test_init_step_objective_gpu if unsupervised
+   * initialization is supported by the layer.
+   */
+  inline Dtype test_init_step_objective(const vector<Blob<Dtype>*>& bottom);
 
   /**
    * @brief Given the top blob error gradients, compute the bottom blob error
@@ -316,12 +348,55 @@ class Layer {
     param_propagate_down_[param_id] = value;
   }
 
+  /**
+   * @brief Specifies the original values of param_propagate_down.
+   * When entring / exiting an on/off stage, the value of param_propagate_down
+   * is set to these values.
+   */
+  inline bool on_off_param_propagate_down(const int param_id) {
+    return (on_off_param_propagate_down_.size() > param_id) ?
+        on_off_param_propagate_down_[param_id] : false;
+  }
+  /**
+   * @brief Sets the original values of param_propagate_down.
+   */
+  inline void set_on_off_param_propagate_down(const int param_id, const bool value) {
+    if (on_off_param_propagate_down_.size() <= param_id) {
+      on_off_param_propagate_down_.resize(param_id + 1, true);
+    }
+    on_off_param_propagate_down_[param_id] = value;
+  }
+
+  inline void set_active_on_off_stage(const string& stage) {
+    if (on_off_stage_.size() == 0) return;
+    if (on_off_stage_ == stage) {
+      for (int i = 0; i < on_off_param_propagate_down_.size(); ++i) {
+        set_param_propagate_down(i, on_off_param_propagate_down(i));
+      }
+    } else {
+      for (int i = 0; i < param_propagate_down_.size(); ++i) {
+        set_param_propagate_down(i, false);
+      }
+    }
+  }
+
+  virtual bool needs_unsupervised_init() {
+    return false;
+  }
+  virtual bool init_has_objective() {
+    return false;
+  }
+
 
  protected:
   /** The protobuf that stores the layer parameters */
   LayerParameter layer_param_;
   /** The phase: TRAIN or TEST */
   Phase phase_;
+  /** The name of the on/off stage */
+  string on_off_stage_;
+  /** Used to keep track of the original state of param_propagate_down */
+  vector<bool> on_off_param_propagate_down_;
   /** The vector that stores the learnable parameters as a set of blobs. */
   vector<shared_ptr<Blob<Dtype> > > blobs_;
   /** Vector indicating whether to compute the diff of each param blob. */
@@ -344,6 +419,35 @@ class Layer {
     return Forward_cpu(bottom, top);
   }
 
+  /** @brief Using the CPU device, init the layer parameters. */
+  virtual bool init_step_cpu(const vector<Blob<Dtype>*>& bottom, Dtype* objective) {
+    if (objective) {
+      *objective = 0;
+    }
+    return false;
+  }
+  /**
+   * @brief Using the GPU device, init the layer parameters.
+   *        Fall back to init_step_cpu() if unavailable.
+   */
+  virtual bool init_step_gpu(const vector<Blob<Dtype>*>& bottom, Dtype* objective) {
+    // LOG(WARNING) << "Using CPU code as backup.";
+    return init_step_cpu(bottom, objective);
+  }
+
+    /** @brief Using the CPU device, init the layer parameters. */
+  virtual Dtype test_init_step_objective_cpu(const vector<Blob<Dtype>*>& bottom) {
+    return 0;
+  }
+  /**
+   * @brief Using the GPU device, init the layer parameters.
+   *        Fall back to init_step_cpu() if unavailable.
+   */
+  virtual Dtype test_init_step_objective_gpu(const vector<Blob<Dtype>*>& bottom) {
+    // LOG(WARNING) << "Using CPU code as backup.";
+    return test_init_step_objective_cpu(bottom);
+  }
+  
   /**
    * @brief Using the CPU device, compute the gradients for any parameters and
    *        for the bottom blobs if propagate_down is true.
@@ -500,6 +604,38 @@ inline void Layer<Dtype>::Backward(const vector<Blob<Dtype>*>& top,
   default:
     LOG(FATAL) << "Unknown caffe mode.";
   }
+}
+
+template <typename Dtype>
+inline bool Layer<Dtype>::init_step(const vector<Blob<Dtype>*>& bottom, Dtype* objective) {
+  bool ret = true;
+  switch (Caffe::mode()) {
+  case Caffe::CPU:
+    ret = init_step_cpu(bottom, objective);
+    break;
+  case Caffe::GPU:
+    ret = init_step_gpu(bottom, objective);
+    break;
+  default:
+    LOG(FATAL) << "Unknown caffe mode.";
+  }
+  return ret;
+}
+
+template <typename Dtype>
+inline Dtype Layer<Dtype>::test_init_step_objective(const vector<Blob<Dtype>*>& bottom) {
+  Dtype ret = 0;
+  switch (Caffe::mode()) {
+  case Caffe::CPU:
+    ret = test_init_step_objective_cpu(bottom);
+    break;
+  case Caffe::GPU:
+    ret = test_init_step_objective_gpu(bottom);
+    break;
+  default:
+    LOG(FATAL) << "Unknown caffe mode.";
+  }
+  return ret;
 }
 
 // Serialize LayerParameter to protocol buffer

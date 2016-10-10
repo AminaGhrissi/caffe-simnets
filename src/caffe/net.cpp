@@ -167,6 +167,8 @@ void Net<Dtype>::Init(const NetParameter& in_param) {
       need_backward |= param_need_backward;
       layers_[layer_id]->set_param_propagate_down(param_id,
                                                   param_need_backward);
+      layers_[layer_id]->set_on_off_param_propagate_down(param_id,
+                                                  param_need_backward);
     }
     for (int param_id = 0; param_id < num_param_blobs; ++param_id) {
       AppendParam(param, layer_id, param_id);
@@ -252,6 +254,7 @@ void Net<Dtype>::Init(const NetParameter& in_param) {
       for (int param_id = 0; param_id < layers_[layer_id]->blobs().size();
            ++param_id) {
         layers_[layer_id]->set_param_propagate_down(param_id, true);
+        layers_[layer_id]->set_on_off_param_propagate_down(param_id, true);
       }
     }
   }
@@ -471,8 +474,20 @@ void Net<Dtype>::AppendParam(const NetParameter& param, const int layer_id,
     learnable_param_ids_.push_back(learnable_param_id);
     has_params_lr_.push_back(param_spec->has_lr_mult());
     has_params_decay_.push_back(param_spec->has_decay_mult());
+    has_params_min_.push_back(param_spec->has_min_value());
+    has_params_max_.push_back(param_spec->has_max_value());
+    has_params_is_logspace_.push_back(param_spec->has_is_logspace());
+    has_params_local_reg_type_.push_back(param_spec->regularization_type_size() > 0);
     params_lr_.push_back(param_spec->lr_mult());
     params_weight_decay_.push_back(param_spec->decay_mult());
+    params_min_.push_back(param_spec->min_value());
+    params_max_.push_back(param_spec->max_value());
+    params_is_logspace_.push_back(param_spec->is_logspace());
+    vector<string> reg_types(param_spec->regularization_type_size());
+    for (int i = 0; i < param_spec->regularization_type_size(); ++i) {
+      reg_types[i] = param_spec->regularization_type(i);
+    }
+    params_local_reg_type_.push_back(reg_types);
   } else {
     // Named param blob with name we've seen before: share params
     const int owner_net_param_id = param_names_index_[param_name];
@@ -511,8 +526,14 @@ void Net<Dtype>::AppendParam(const NetParameter& param, const int layer_id,
     learnable_param_ids_.push_back(learnable_param_id);
     if (param_spec->has_lr_mult()) {
       if (has_params_lr_[learnable_param_id]) {
-        CHECK_EQ(param_spec->lr_mult(), params_lr_[learnable_param_id])
-            << "Shared param '" << param_name << "' has mismatched lr_mult.";
+        if (param_spec->lr_mult() != 0.0) {
+            if (params_lr_[learnable_param_id] == 0.0) {
+                params_lr_[learnable_param_id] = param_spec->lr_mult();
+            } else {
+                CHECK_EQ(param_spec->lr_mult(), params_lr_[learnable_param_id])
+                    << "Shared param '" << param_name << "' has mismatched lr_mult.";
+            }
+        }
       } else {
         has_params_lr_[learnable_param_id] = true;
         params_lr_[learnable_param_id] = param_spec->lr_mult();
@@ -526,6 +547,51 @@ void Net<Dtype>::AppendParam(const NetParameter& param, const int layer_id,
       } else {
         has_params_decay_[learnable_param_id] = true;
         params_weight_decay_[learnable_param_id] = param_spec->decay_mult();
+      }
+    }
+    if (param_spec->has_min_value()) {
+      if (has_params_min_[learnable_param_id]) {
+        CHECK_EQ(param_spec->min_value(), params_min_[learnable_param_id])
+            << "Shared param '" << param_name << "' has mismatched min_value.";
+      } else {
+        has_params_min_[learnable_param_id] = true;
+        params_min_[learnable_param_id] = param_spec->min_value();
+      }
+    }
+    if (param_spec->has_max_value()) {
+      if (has_params_max_[learnable_param_id]) {
+        CHECK_EQ(param_spec->max_value(), params_max_[learnable_param_id])
+            << "Shared param '" << param_name << "' has mismatched max_value.";
+      } else {
+        has_params_max_[learnable_param_id] = true;
+        params_max_[learnable_param_id] = param_spec->max_value();
+      }
+    }
+    if (param_spec->has_is_logspace()) {
+      if (has_params_is_logspace_[learnable_param_id]) {
+        CHECK_EQ(param_spec->is_logspace(), params_is_logspace_[learnable_param_id])
+            << "Shared param '" << param_name << "' has mismatched is_logspace.";
+      } else {
+        has_params_is_logspace_[learnable_param_id] = true;
+        params_is_logspace_[learnable_param_id] = param_spec->is_logspace();
+      }
+    }
+    if (param_spec->regularization_type_size() > 0) {
+      if (has_params_local_reg_type_[learnable_param_id]) {
+        CHECK_EQ(param_spec->regularization_type_size(),
+                 params_local_reg_type_[learnable_param_id].size())
+                  << "Shared param '" << param_name << "' has mismatched regularization_type size.";
+        for (int i = 0; i < param_spec->regularization_type_size(); ++i) {
+          CHECK_EQ(param_spec->regularization_type(i), params_local_reg_type_[learnable_param_id][i])
+                      << "Shared param '" << param_name << "' has mismatched regularization_type.";
+        }
+      } else {
+        has_params_local_reg_type_[learnable_param_id] = true;
+        vector<string> reg_types(param_spec->regularization_type_size());
+        for (int i = 0; i < param_spec->regularization_type_size(); ++i) {
+          reg_types[i] = param_spec->regularization_type(i);
+        }
+        params_local_reg_type_[learnable_param_id] = reg_types;
       }
     }
   }
@@ -681,7 +747,9 @@ void Net<Dtype>::ShareTrainedLayersWith(const Net* other) {
       ++target_layer_id;
     }
     if (target_layer_id == layer_names_.size()) {
-      LOG(INFO) << "Ignoring source layer " << source_layer_name;
+      if (source_layer->blobs().size() > 0) {
+        LOG(INFO) << "Ignoring source layer " << source_layer_name;
+      }
       continue;
     }
     DLOG(INFO) << "Copying source layer " << source_layer_name;
@@ -916,6 +984,15 @@ template <typename Dtype>
 void Net<Dtype>::Update() {
   for (int i = 0; i < learnable_params_.size(); ++i) {
     learnable_params_[i]->Update();
+    learnable_params_[i]->Clip(params_min_[i], params_max_[i]);
+  }
+}
+
+
+template <typename Dtype>
+void Net<Dtype>::Clip() {
+  for (int i = 0; i < learnable_params_.size(); ++i) {
+    learnable_params_[i]->Clip(params_min_[i], params_max_[i]);
   }
 }
 
@@ -983,6 +1060,43 @@ const shared_ptr<Layer<Dtype> > Net<Dtype>::layer_by_name(
     LOG(WARNING) << "Unknown layer name " << layer_name;
   }
   return layer_ptr;
+}
+
+template <typename Dtype>
+bool Net<Dtype>::needs_unsupervised_init() {
+  for (int layer_index = 0; layer_index < layers_.size(); ++layer_index) {
+    if (needs_unsupervised_init(layer_index)) {
+      return true;
+    }
+  }
+  return false;
+}
+template <typename Dtype>
+bool Net<Dtype>::init_has_objective(const int layer_index) {
+  CHECK_GE(layer_index, 0);
+  CHECK_LT(layer_index, layers_.size());
+  return layers_[layer_index]->init_has_objective();
+}
+
+template <typename Dtype>
+bool Net<Dtype>::needs_unsupervised_init(const int layer_index) {
+  CHECK_GE(layer_index, 0);
+  CHECK_LT(layer_index, layers_.size());
+  return layers_[layer_index]->needs_unsupervised_init();
+}
+template <typename Dtype>
+bool Net<Dtype>::init_step(const int layer_index, Dtype* objective) {
+  CHECK_GE(layer_index, 0);
+  CHECK_LT(layer_index, layers_.size());
+  layers_[layer_index]->Reshape(bottom_vecs_[layer_index], top_vecs_[layer_index]);
+  return layers_[layer_index]->init_step(bottom_vecs_[layer_index], objective);
+}
+template <typename Dtype>
+Dtype Net<Dtype>::test_init_step_objective(const int layer_index) {
+  CHECK_GE(layer_index, 0);
+  CHECK_LT(layer_index, layers_.size());
+  layers_[layer_index]->Reshape(bottom_vecs_[layer_index], top_vecs_[layer_index]);
+  return layers_[layer_index]->test_init_step_objective(bottom_vecs_[layer_index]);
 }
 
 INSTANTIATE_CLASS(Net);

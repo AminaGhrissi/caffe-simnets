@@ -3,6 +3,9 @@
 #include <vector>
 
 #include "caffe/layers/pooling_layer.hpp"
+#include "caffe/common.hpp"
+#include "caffe/layer.hpp"
+#include "caffe/syncedmem.hpp"
 #include "caffe/util/math_functions.hpp"
 
 namespace caffe {
@@ -68,8 +71,13 @@ void PoolingLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
     CHECK(this->layer_param_.pooling_param().pool()
         == PoolingParameter_PoolMethod_AVE
         || this->layer_param_.pooling_param().pool()
-        == PoolingParameter_PoolMethod_MAX)
-        << "Padding implemented only for average and max pooling.";
+        == PoolingParameter_PoolMethod_MAX
+        || this->layer_param_.pooling_param().pool()
+        == PoolingParameter_PoolMethod_SUM
+        || this->layer_param_.pooling_param().pool()
+		== PoolingParameter_PoolMethod_PROD
+        )
+        << "Padding implemented only for average, sum, product and max pooling.";
     CHECK_LT(pad_h_, kernel_h_);
     CHECK_LT(pad_w_, kernel_w_);
   }
@@ -186,6 +194,7 @@ void PoolingLayer<Dtype>::Forward_cpu(const vector<Blob<Dtype>*>& bottom,
     }
     break;
   case PoolingParameter_PoolMethod_AVE:
+  case PoolingParameter_PoolMethod_SUM:
     for (int i = 0; i < top_count; ++i) {
       top_data[i] = 0;
     }
@@ -203,13 +212,16 @@ void PoolingLayer<Dtype>::Forward_cpu(const vector<Blob<Dtype>*>& bottom,
             wstart = max(wstart, 0);
             hend = min(hend, height_);
             wend = min(wend, width_);
+
             for (int h = hstart; h < hend; ++h) {
               for (int w = wstart; w < wend; ++w) {
                 top_data[ph * pooled_width_ + pw] +=
                     bottom_data[h * width_ + w];
               }
             }
-            top_data[ph * pooled_width_ + pw] /= pool_size;
+            if (this->layer_param_.pooling_param().pool() == PoolingParameter_PoolMethod_AVE) {
+              top_data[ph * pooled_width_ + pw] /= pool_size;
+            }
           }
         }
         // compute offset
@@ -218,6 +230,42 @@ void PoolingLayer<Dtype>::Forward_cpu(const vector<Blob<Dtype>*>& bottom,
       }
     }
     break;
+
+  case PoolingParameter_PoolMethod_PROD:
+	  for (int i = 0; i < top_count; ++i) {
+	        top_data[i] = 1; // initializing all top data to 1 for product calculation later
+	      }
+	      // The main loop
+	      for (int n = 0; n < bottom[0]->num(); ++n) {
+	        for (int c = 0; c < channels_; ++c) {
+	          for (int ph = 0; ph < pooled_height_; ++ph) {
+	            for (int pw = 0; pw < pooled_width_; ++pw) {
+	              int hstart = ph * stride_h_ - pad_h_;
+	              int wstart = pw * stride_w_ - pad_w_;
+	              int hend = min(hstart + kernel_h_, height_ + pad_h_);
+	              int wend = min(wstart + kernel_w_, width_ + pad_w_);
+	              hstart = max(hstart, 0);
+	              wstart = max(wstart, 0);
+	              hend = min(hend, height_);
+	              wend = min(wend, width_);
+	              for (int h = hstart; h < hend; ++h) {
+	                for (int w = wstart; w < wend; ++w) {
+	                  top_data[ph * pooled_width_ + pw] *=
+	                      bottom_data[h * width_ + w];
+	                }
+	              }
+
+	            }
+	          }
+	          // compute offset
+	          bottom_data += bottom[0]->offset(0, 1);
+	          top_data += top[0]->offset(0, 1);
+	        }
+	      }
+
+
+
+	  break;
   case PoolingParameter_PoolMethod_STOCHASTIC:
     NOT_IMPLEMENTED;
     break;
@@ -232,6 +280,7 @@ void PoolingLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
   if (!propagate_down[0]) {
     return;
   }
+
   const Dtype* top_diff = top[0]->cpu_diff();
   Dtype* bottom_diff = bottom[0]->mutable_cpu_diff();
   // Different pooling methods. We explicitly do the switch outside the for
@@ -270,6 +319,7 @@ void PoolingLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
     }
     break;
   case PoolingParameter_PoolMethod_AVE:
+  case PoolingParameter_PoolMethod_SUM:
     // The main loop
     for (int n = 0; n < top[0]->num(); ++n) {
       for (int c = 0; c < channels_; ++c) {
@@ -279,7 +329,11 @@ void PoolingLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
             int wstart = pw * stride_w_ - pad_w_;
             int hend = min(hstart + kernel_h_, height_ + pad_h_);
             int wend = min(wstart + kernel_w_, width_ + pad_w_);
-            int pool_size = (hend - hstart) * (wend - wstart);
+            int pool_size = (hend - hstart) * (wend - wstart);// Add calculation of product of bottom data pooled patch
+            int dx_factor = 1;
+            if (this->layer_param_.pooling_param().pool() == PoolingParameter_PoolMethod_AVE) {
+              dx_factor = pool_size;
+            }
             hstart = max(hstart, 0);
             wstart = max(wstart, 0);
             hend = min(hend, height_);
@@ -287,7 +341,7 @@ void PoolingLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
             for (int h = hstart; h < hend; ++h) {
               for (int w = wstart; w < wend; ++w) {
                 bottom_diff[h * width_ + w] +=
-                  top_diff[ph * pooled_width_ + pw] / pool_size;
+                  top_diff[ph * pooled_width_ + pw] / dx_factor;
               }
             }
           }
@@ -298,6 +352,59 @@ void PoolingLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
       }
     }
     break;
+  case PoolingParameter_PoolMethod_PROD:
+  {
+	  const Dtype* bottom_data = bottom[0]->cpu_data();
+	  const Dtype* top_data = top[0]->cpu_data();
+	  bool rect_2_w_kernel = (kernel_h_ == 1 && kernel_w_ == 2);
+	  bool rect_2_h_kernel = (kernel_h_ == 2 && kernel_w_ == 1);
+
+	  // The main loop
+	      for (int n = 0; n < top[0]->num(); ++n) {
+	        for (int c = 0; c < channels_; ++c) {
+	          for (int ph = 0; ph < pooled_height_; ++ph) {
+	            for (int pw = 0; pw < pooled_width_; ++pw) {
+	              int hstart = ph * stride_h_ - pad_h_;
+	              int wstart = pw * stride_w_ - pad_w_;
+	              int hend = min(hstart + kernel_h_, height_ + pad_h_);
+	              int wend = min(wstart + kernel_w_, width_ + pad_w_);
+	              hstart = max(hstart, 0);
+	              wstart = max(wstart, 0);
+	              hend = min(hend, height_);
+	              wend = min(wend, width_);
+
+	              for (int h = hstart; h < hend; ++h) {
+	                for (int w = wstart; w < wend; ++w) {
+	                	// In special case of 1x2 or 2x1 kernel we will lower potential for
+	                	// numeric stability issues by avoiding division. For computing bottom_diff we will simply multiply top_diff
+	                	// by bottom_data in the other location in the 2x1 (or 1x2) rect.
+
+	                	if( rect_2_w_kernel ){
+	                		int wother = wstart + ( w == wstart );
+	                		bottom_diff[h * width_ + w] += top_diff[ph * pooled_width_ + pw] * bottom_data[h * width_ + wother];
+	                	}
+	                	else if( rect_2_h_kernel ){
+							int hother = hstart + ( h == hstart );
+							bottom_diff[h * width_ + w] += top_diff[ph * pooled_width_ + pw] * bottom_data[hother * width_ + w];
+						}
+	                	else{
+	                		bottom_diff[h * width_ + w] += 	top_diff[ph * pooled_width_ + pw] * top_data[ph * pooled_width_ + pw] /
+	                			                			bottom_data[h * width_ + w] ;
+	                	}
+
+	                }
+	              }
+	            }
+	          }
+	          // offset
+	          bottom_diff += bottom[0]->offset(0, 1);
+	          top_diff += top[0]->offset(0, 1);
+	        }
+	      }
+
+  }
+	  break;
+
   case PoolingParameter_PoolMethod_STOCHASTIC:
     NOT_IMPLEMENTED;
     break;
@@ -312,5 +419,6 @@ STUB_GPU(PoolingLayer);
 #endif
 
 INSTANTIATE_CLASS(PoolingLayer);
+
 
 }  // namespace caffe

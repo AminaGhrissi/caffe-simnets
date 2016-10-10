@@ -231,4 +231,103 @@ template void col2im_nd_cpu<double>(const double* data_col,
     const int* dilation, double* data_im);
 
 
+// 3D Convolutions
+
+
+template <typename Dtype>
+void im2col_3d_cpu(const Dtype* data_im,
+                   const int channels, const int height, const int width,
+                   const int patch_c, const int patch_h, const int patch_w,
+                   const int pad_c, const int pad_h, const int pad_w,
+                   const int stride_c, const int stride_h, const int stride_w,
+                   Dtype* data_col,
+                   const bool round_down, const Dtype out_of_bounds_value) {
+  int height_col = dimension_out_size(height, pad_h, patch_h, stride_h, round_down);
+  int width_col = dimension_out_size(width, pad_w, patch_w, stride_w, round_down);
+  int channels_col = dimension_out_size(channels, pad_c, patch_c, stride_c, round_down);
+  int patch_col = patch_c * patch_h * patch_w;
+  for (int p = 0; p < patch_col; ++p) {
+    int w_offset = p % patch_w;
+    int h_offset = (p / patch_w) % patch_h;
+    int c_offset = p / patch_h / patch_w;
+    for (int c = 0; c < channels_col; ++c) {
+      for (int h = 0; h < height_col; ++h) {
+        for (int w = 0; w < width_col; ++w) {
+          int h_pad = h * stride_h - pad_h + h_offset;
+          int w_pad = w * stride_w - pad_w + w_offset;
+          int c_pad = c * stride_c - pad_c + c_offset;
+          if (h_pad >= 0 && h_pad < height && w_pad >= 0 && w_pad < width
+              && c_pad >= 0 && c_pad < channels) {
+            data_col[((p * channels_col + c) * height_col + h) * width_col + w] =
+            data_im[(c_pad * height + h_pad) * width + w_pad];
+          } else {
+            data_col[((p * channels_col + c) * height_col + h) * width_col + w] = out_of_bounds_value;
+          }
+        }
+      }
+    }
+  }
+}
+
+// Explicit instantiation
+template void im2col_3d_cpu(const float* data_im,
+                            const int channels, const int height, const int width,
+                            const int patch_c, const int patch_h, const int patch_w,
+                            const int pad_c, const int pad_h, const int pad_w,
+                            const int stride_c, const int stride_h, const int stride_w,
+                            float* data_col,
+                            const bool round_down, const float out_of_bounds_value);
+template void im2col_3d_cpu(const double* data_im,
+                            const int channels, const int height, const int width,
+                            const int patch_c, const int patch_h, const int patch_w,
+                            const int pad_c, const int pad_h, const int pad_w,
+                            const int stride_c, const int stride_h, const int stride_w,
+                            double* data_col,
+                            const bool round_down, const double out_of_bounds_value);
+template <typename Dtype>
+void col2im_3d_cpu(const Dtype* data_col,
+                   const int channels, const int height, const int width,
+                   const int patch_c, const int patch_h, const int patch_w,
+                   const int pad_c, const int pad_h, const int pad_w,
+                   const int stride_c, const int stride_h, const int stride_w,
+                   Dtype* data_im, const bool round_down) {
+  caffe_set(height * width * channels, Dtype(0), data_im);
+  int height_col = dimension_out_size(height, pad_h, patch_h, stride_h, round_down);
+  int width_col = dimension_out_size(width, pad_w, patch_w, stride_w, round_down);
+  int channels_col = dimension_out_size(channels, pad_c, patch_c, stride_c, round_down);
+  int patch_col = patch_c * patch_h * patch_w;
+  for (int p = 0; p < patch_col; ++p) {
+    int w_offset = p % patch_w;
+    int h_offset = (p / patch_w) % patch_h;
+    int c_offset = p / patch_h / patch_w;
+    for (int c = 0; c < channels_col; ++c) {
+      for (int h = 0; h < height_col; ++h) {
+        for (int w = 0; w < width_col; ++w) {
+          int h_pad = h * stride_h - pad_h + h_offset;
+          int w_pad = w * stride_w - pad_w + w_offset;
+          int c_pad = c * stride_c - pad_c + c_offset;
+          if (h_pad >= 0 && h_pad < height && w_pad >= 0 && w_pad < width
+              && c_pad >= 0 && c_pad < channels) {
+            data_im[(c_pad * height + h_pad) * width + w_pad] +=
+            data_col[((p * channels_col + c) * height_col + h) * width_col + w];
+          }
+        }
+      }
+    }
+  }
+}
+
+template void col2im_3d_cpu(const float* data_col,
+                            const int channels, const int height, const int width,
+                            const int patch_c, const int patch_h, const int patch_w,
+                            const int pad_c, const int pad_h, const int pad_w,
+                            const int stride_c, const int stride_h, const int stride_w,
+                            float* data_im, const bool round_down);
+template void col2im_3d_cpu(const double* data_col,
+                            const int channels, const int height, const int width,
+                            const int patch_c, const int patch_h, const int patch_w,
+                            const int pad_c, const int pad_h, const int pad_w,
+                            const int stride_c, const int stride_h, const int stride_w,
+                            double* data_im, const bool round_down);
+
 }  // namespace caffe

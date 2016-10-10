@@ -27,7 +27,7 @@ static void apply_buffers(const vector<Blob<Dtype>*>& blobs,
                           Dtype* buffer, size_t total_size, Op op) {
   Dtype* ptr = buffer;
   for (int i = 0; i < blobs.size(); ++i) {
-    int size = blobs[i]->count();
+    int size = blobs[i]->count() + blobs[i]->padding();
     switch (op) {
       case copy: {
         // Init buffer to current values of blobs
@@ -60,7 +60,7 @@ template<typename Dtype>
 static size_t total_size(const vector<Blob<Dtype>*>& params) {
   size_t size = 0;
   for (int i = 0; i < params.size(); ++i)
-    size += params[i]->count();
+    size += params[i]->count() + params[i]->padding();
   // Size have at least one byte, otherwise cudaMalloc fails if net has no
   // learnable parameters.
   return (size > 0) ? size : 1;

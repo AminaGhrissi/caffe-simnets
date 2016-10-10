@@ -26,12 +26,19 @@ void caffe_cpu_gemv(const CBLAS_TRANSPOSE TransA, const int M, const int N,
     Dtype* y);
 
 template <typename Dtype>
+void caffe_cpu_dgmm(const CBLAS_SIDE mode, const int M, const int N,
+    const Dtype* A, const Dtype* x, Dtype* C);
+
+template <typename Dtype>
 void caffe_axpy(const int N, const Dtype alpha, const Dtype* X,
     Dtype* Y);
 
 template <typename Dtype>
 void caffe_cpu_axpby(const int N, const Dtype alpha, const Dtype* X,
     const Dtype beta, Dtype* Y);
+
+template <typename Dtype>
+Dtype caffe_cpu_nrm2(const int N, const Dtype* X);
 
 template <typename Dtype>
 void caffe_copy(const int N, const Dtype *X, Dtype *Y);
@@ -73,23 +80,31 @@ template <typename Dtype>
 Dtype caffe_nextafter(const Dtype b);
 
 template <typename Dtype>
+void caffe_rng_uniform_int(const int n, const Dtype a, const Dtype b, Dtype* r);
+
+template <typename Dtype>
 void caffe_rng_uniform(const int n, const Dtype a, const Dtype b, Dtype* r);
 
 template <typename Dtype>
 void caffe_rng_gaussian(const int n, const Dtype mu, const Dtype sigma,
                         Dtype* r);
-
 template <typename Dtype>
-void caffe_rng_bernoulli(const int n, const Dtype p, int* r);
+void caffe_rng_gamma(const int n, const Dtype alpha, Dtype* r);
 
-template <typename Dtype>
-void caffe_rng_bernoulli(const int n, const Dtype p, unsigned int* r);
+template <typename Dtype, typename Otype>
+void caffe_rng_bernoulli(const int n, const Dtype p, Otype* r);
+
+// template <typename Dtype>
+// void caffe_rng_bernoulli(const int n, const Dtype p, int* r);
+
+// template <typename Dtype>
+// void caffe_rng_bernoulli(const int n, const Dtype p, unsigned int* r);
 
 template <typename Dtype>
 void caffe_exp(const int n, const Dtype* a, Dtype* y);
 
 template <typename Dtype>
-void caffe_log(const int n, const Dtype* a, Dtype* y);
+void caffe_log(const int n, const Dtype* a, Dtype* y, const Dtype fudge_factor = 0);
 
 template <typename Dtype>
 void caffe_abs(const int n, const Dtype* a, Dtype* y);
@@ -105,10 +120,24 @@ Dtype caffe_cpu_strided_dot(const int n, const Dtype* x, const int incx,
 template <typename Dtype>
 Dtype caffe_cpu_asum(const int n, const Dtype* x);
 
+// Transposes Matrix A of NxM dimensions to B
+template <typename Dtype>
+void caffe_cpu_transpose(const int N, const int M, const Dtype * A, Dtype * B);
+
+template <typename Dtype>
+void caffe_cpu_clip_min(const int n, const Dtype* x, Dtype* y, const Dtype min_value);
+
+template <typename Dtype>
+void caffe_cpu_clip_max(const int n, const Dtype* x, Dtype* y, const Dtype max_value);
+
+template <typename Dtype>
+Dtype caffe_ceiled_div(const Dtype a, const Dtype b);
+
+
 // the branchless, type-safe version from
 // http://stackoverflow.com/questions/1903954/is-there-a-standard-sign-function-signum-sgn-in-c-c
 template<typename Dtype>
-inline int8_t caffe_sign(Dtype val) {
+__forceinline__ __device__ __host__ int8_t caffe_sign(Dtype val) {
   return (Dtype(0) < val) - (val < Dtype(0));
 }
 
@@ -138,12 +167,37 @@ DEFINE_CAFFE_CPU_UNARY_FUNC(sgnbit, \
     y[i] = static_cast<bool>((std::signbit)(x[i])));
 
 DEFINE_CAFFE_CPU_UNARY_FUNC(fabs, y[i] = std::fabs(x[i]));
+DEFINE_CAFFE_CPU_UNARY_FUNC(inv, y[i] = Dtype(1.0) / x[i]);
+DEFINE_CAFFE_CPU_UNARY_FUNC(invsqrt, y[i] = Dtype(1.0) / std::sqrt(x[i]));
 
 template <typename Dtype>
 void caffe_cpu_scale(const int n, const Dtype alpha, const Dtype *x, Dtype* y);
 
-#ifndef CPU_ONLY  // GPU
+template <typename Dtype>
+void caffe_cpu_normalize_patches_rows_forward(const int K, const int N, const Dtype fudge_factor,
+  Dtype* row_buffer, const bool normalize_variance = true);
 
+template <typename Dtype>
+void caffe_cpu_normalize_patches_rows_backward(const int K, const int N, const Dtype fudge_factor,
+  const Dtype* row_buffer, const Dtype* normalized_row_buffer,
+  Dtype* row_buffer_diff, const bool normalize_variance = true);
+
+template <typename Dtype>
+void caffe_cpu_logspace_l2(const int N, const Dtype weight_decay, const Dtype* in, Dtype* out);
+
+template <typename Dtype>
+void caffe_cpu_l2_smoothing(const int N, const int dim, const Dtype weight_decay, const Dtype* in, Dtype* out);
+template <typename Dtype>
+void caffe_cpu_logspace_l2_smoothing(const int N, const int dim, const Dtype weight_decay, const Dtype* in, Dtype* out);
+
+// Assumes matrix "in" has N rows of length K, each row represents a normalized
+// discrete distribution in log-space. "out" has the same dimensions as "in",
+// and the function will change it so it contains the derivative of the entropy
+// of each row vector, assuming "in" is the output of a normalization step.
+template <typename Dtype>
+void caffe_cpu_maximum_entropy_regularization(const int N, const int K, const Dtype* in, Dtype* out);
+
+#ifndef CPU_ONLY  // GPU
 // Decaf gpu gemm provides an interface that is almost the same as the cpu
 // gemm function - following the c convention and calling the fortran-order
 // gpu code under the hood.
@@ -157,6 +211,14 @@ template <typename Dtype>
 void caffe_gpu_gemv(const CBLAS_TRANSPOSE TransA, const int M, const int N,
     const Dtype alpha, const Dtype* A, const Dtype* x, const Dtype beta,
     Dtype* y);
+
+template <typename Dtype>
+void caffe_gpu_dgmm(const CBLAS_SIDE mode, const int M, const int N,
+    const Dtype* A, const Dtype* x, Dtype* C);
+
+// Transposes Matrix A of NxM dimensions to B
+template <typename Dtype>
+void caffe_gpu_transpose(const int N, const int M, const Dtype * A, Dtype * B, const cudaStream_t stream = 0);
 
 template <typename Dtype>
 void caffe_gpu_axpy(const int N, const Dtype alpha, const Dtype* X,
@@ -195,6 +257,9 @@ template <typename Dtype>
 void caffe_gpu_mul(const int N, const Dtype* a, const Dtype* b, Dtype* y);
 
 template <typename Dtype>
+void caffe_gpu_mask(const int N, const Dtype* a, const Dtype* mask, const Dtype threshold, Dtype* y);
+
+template <typename Dtype>
 void caffe_gpu_div(const int N, const Dtype* a, const Dtype* b, Dtype* y);
 
 template <typename Dtype>
@@ -204,7 +269,16 @@ template <typename Dtype>
 void caffe_gpu_exp(const int n, const Dtype* a, Dtype* y);
 
 template <typename Dtype>
-void caffe_gpu_log(const int n, const Dtype* a, Dtype* y);
+void caffe_gpu_sqr(const int n, const Dtype* a, Dtype* y);
+
+template <typename Dtype>
+void caffe_gpu_log(const int n, const Dtype* a, Dtype* y, const Dtype fudge_factor = 0);
+
+template <typename Dtype>
+void caffe_gpu_inv(const int n, const Dtype* a, Dtype* y);
+
+template <typename Dtype>
+void caffe_gpu_invsqrt(const int n, const Dtype* a, Dtype* y);
 
 template <typename Dtype>
 void caffe_gpu_powx(const int n, const Dtype* a, const Dtype b, Dtype* y);
@@ -226,7 +300,7 @@ void caffe_gpu_rng_gaussian(const int n, const Dtype mu, const Dtype sigma,
                             Dtype* r);
 
 template <typename Dtype>
-void caffe_gpu_rng_bernoulli(const int n, const Dtype p, int* r);
+void caffe_gpu_rng_bernoulli(const int n, const Dtype p, Dtype* r);
 
 template <typename Dtype>
 void caffe_gpu_dot(const int n, const Dtype* x, const Dtype* y, Dtype* out);
@@ -245,6 +319,42 @@ void caffe_gpu_fabs(const int n, const Dtype* x, Dtype* y);
 
 template <typename Dtype>
 void caffe_gpu_scale(const int n, const Dtype alpha, const Dtype *x, Dtype* y);
+
+template <typename Dtype>
+void caffe_gpu_clip_min(const int n, const Dtype* x, Dtype* y, const Dtype min_value);
+
+template <typename Dtype>
+void caffe_gpu_clip_max(const int n, const Dtype* x, Dtype* y, const Dtype max_value);
+
+template <typename Dtype>
+Dtype caffe_gpu_nrm2(const int N, const Dtype* X);
+
+template <typename Dtype>
+void caffe_gpu_nrm2(const int N, const Dtype* X, Dtype* result);
+
+template <typename Dtype>
+void caffe_gpu_normalize_patches_rows_forward(const int K, const int N, const Dtype fudge_factor,
+  Dtype* row_buffer, const bool normalize_variance = true);
+
+template <typename Dtype>
+void caffe_gpu_normalize_patches_rows_backward(const int K, const int N, const Dtype fudge_factor,
+  const Dtype* row_buffer, const Dtype* normalized_row_buffer,
+  Dtype* row_buffer_diff, const bool normalize_variance = true);
+
+template <typename Dtype>
+void caffe_gpu_logspace_l2(const int N, const Dtype weight_decay, const Dtype* in, Dtype* out);
+
+template <typename Dtype>
+void caffe_gpu_l2_smoothing(const int N, const int dim, const Dtype weight_decay, const Dtype* in, Dtype* out);
+template <typename Dtype>
+void caffe_gpu_logspace_l2_smoothing(const int N, const int dim, const Dtype weight_decay, const Dtype* in, Dtype* out);
+
+// Assumes matrix "in" has N rows of length K, each row represents a normalized
+// discrete distribution in log-space. "out" has the same dimensions as "in",
+// and the function will change it so it contains the derivative of the entropy
+// of each row vector, assuming "in" is the output of a normalization step.
+template <typename Dtype>
+void caffe_gpu_maximum_entropy_regularization(const int N, const int K, const Dtype* in, Dtype* out);
 
 #define DEFINE_AND_INSTANTIATE_GPU_UNARY_FUNC(name, operation) \
 template<typename Dtype> \

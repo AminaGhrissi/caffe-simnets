@@ -1,9 +1,12 @@
 #ifndef CAFFE_IMAGE_DATA_LAYER_HPP_
 #define CAFFE_IMAGE_DATA_LAYER_HPP_
-
+#ifdef USE_OPENCV
+#include <opencv2/core/core.hpp>
+#endif
 #include <string>
 #include <utility>
 #include <vector>
+#include <map>
 
 #include "caffe/blob.hpp"
 #include "caffe/data_transformer.hpp"
@@ -38,6 +41,10 @@ class ImageDataLayer : public BasePrefetchingDataLayer<Dtype> {
   virtual void load_batch(Batch<Dtype>* batch);
 
   vector<std::pair<std::string, int> > lines_;
+#ifdef USE_OPENCV
+  std::map<std::string, cv::Mat> cache_;
+#endif
+  bool use_cache_;
   int lines_id_;
 };
 

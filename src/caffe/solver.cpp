@@ -61,6 +61,17 @@ void Solver<Dtype>::Init(const SolverParameter& param) {
   }
   iter_ = 0;
   current_step_ = 0;
+  CHECK_EQ(param_.on_off_stage_name_size(), param_.on_off_stage_iter_size())
+    << "Number of on/off stage names should match the number of on/off stage's iterations";
+  const int num_stages = param_.on_off_stage_name_size();
+  on_off_stage_name_.resize(num_stages);
+  on_off_stage_iter_.resize(num_stages);
+  for (int i = 0; i < num_stages; ++i) {
+    on_off_stage_name_[i] = param_.on_off_stage_name(i);
+    on_off_stage_iter_[i] = param_.on_off_stage_iter(i);
+  }
+  current_stage_iter_ = 0;
+  current_stage_idx_ = 0;
 }
 
 template <typename Dtype>
@@ -186,7 +197,7 @@ void Solver<Dtype>::InitTestNets() {
       test_nets_[i].reset(new Net<Dtype>(net_params[i],
           root_solver_->test_nets_[i].get()));
     }
-    test_nets_[i]->set_debug_info(param_.debug_info());
+    test_nets_[i]->set_debug_info(param_.debug_info() && param_.debug_info_test_nets());
   }
 }
 
@@ -219,7 +230,11 @@ void Solver<Dtype>::Step(int iters) {
     // accumulate the loss and gradient
     Dtype loss = 0;
     for (int i = 0; i < param_.iter_size(); ++i) {
-      loss += net_->ForwardBackward();
+      string on_off_stage = "";
+      if (on_off_stage_name_.size() > 0) {
+        on_off_stage = on_off_stage_name_[current_stage_idx_];
+      }
+      loss += net_->ForwardBackward(on_off_stage);
     }
     loss /= param_.iter_size();
     // average the loss across iterations for smoothed reporting
@@ -255,6 +270,14 @@ void Solver<Dtype>::Step(int iters) {
     // Increment the internal iter_ counter -- its value should always indicate
     // the number of times the weights have been updated.
     ++iter_;
+    if (on_off_stage_name_.size() > 0) {
+      ++current_stage_iter_;
+      while (current_stage_iter_ >= on_off_stage_iter_[current_stage_idx_]) {
+        current_stage_iter_ = 0;
+        current_stage_idx_ = (current_stage_idx_ + 1) % on_off_stage_name_.size();
+      }
+    }
+    
 
     SolverAction::Enum request = GetRequestedAction();
 
@@ -281,12 +304,17 @@ void Solver<Dtype>::Solve(const char* resume_file) {
 
   // Initialize to false every time we start solving.
   requested_early_exit_ = false;
-
+  
+  if (!resume_file && net_->needs_unsupervised_init()) {
+    this->UnsupervisedInit();
+  }
   if (resume_file) {
     LOG(INFO) << "Restoring previous solver status from " << resume_file;
     Restore(resume_file);
   }
-
+  // Make sure the current weights are within the specified constraints
+  net_->Clip();
+  
   // For a network that is trained by the solver, no bottom or top vecs
   // should be given, and we will just provide dummy vecs.
   int start_iter = iter_;
@@ -322,6 +350,58 @@ void Solver<Dtype>::Solve(const char* resume_file) {
   LOG(INFO) << "Optimization Done.";
 }
 
+template <typename Dtype>
+void Solver<Dtype>::UnsupervisedInit() {
+    LOG(INFO) << "Begin Unsupervised Initialization of Network.";
+    for (int i = 0; i < this->net_->layers().size(); ++i) {
+        if (this->net_->needs_unsupervised_init(i)) {
+            Dtype objective = 0;
+            Dtype* objective_ptr = NULL;
+            bool has_objective = this->net_->init_has_objective(i);
+            LOG(INFO) << "Initializing layer: " << this->net_->layer_names()[i];
+            int iter = 0;
+            do {
+                if (has_objective) {
+                    if (objective_ptr && param_.display() && (iter % param_.display() == 0 || iter == 1)) {
+                        LOG(INFO) << "\tUnsupervised mini batch objective at iteration #" << iter << ": " << objective;
+                    } else if (param_.display() && ((iter + 1) % param_.display() == 0 || iter == 0)) {
+                        objective_ptr = &objective;
+                    } else {
+                        objective_ptr = NULL;
+                    }
+                    if (iter > 0 && param_.init_test_interval() && (iter % param_.init_test_interval() == 0 || iter == 1)) {
+                        LOG(INFO) << "\tTesting unsupervised objective...";
+                        Dtype test_objective = 0;
+                        for (int j = 0; j < param_.init_test_iter(); ++j) {
+                            if (i > 0) {
+                                this->net_->ForwardTo(i-1);
+                            }
+                            test_objective += this->net_->test_init_step_objective(i);
+                            if (isinf(test_objective)) {
+                                break;
+                            }
+                        }
+                        test_objective /= param_.init_test_iter();
+                        LOG(INFO) << "\t\tUnsupervised full test objective at " << iter << ": " << test_objective;
+                    }
+                } else {
+                    if (iter % param_.display() == 0) {
+                        LOG(INFO) << "\tUnsupervised iteration #" << iter;
+                    }
+                }
+                ++iter;
+                if (i > 0) {
+                    this->net_->ForwardTo(i-1);
+                }
+            } while (this->net_->init_step(i, objective_ptr));
+            if (objective_ptr) {
+                LOG(INFO) << "\tUnsupervised objective at iteration #" << iter << ": " << objective;  
+            } 
+        }
+    }
+    LOG(INFO) << "Completed Unsupervised Initialization of Network.";
+}
+    
 template <typename Dtype>
 void Solver<Dtype>::TestAll() {
   for (int test_net_id = 0;

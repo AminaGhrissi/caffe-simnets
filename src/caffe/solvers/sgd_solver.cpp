@@ -46,8 +46,36 @@ Dtype SGDSolver<Dtype>::GetLearningRate() {
       LOG(INFO) << "MultiStep Status: Iteration " <<
       this->iter_ << ", step = " << this->current_step_;
     }
-    rate = this->param_.base_lr() *
-        pow(this->param_.gamma(), this->current_step_);
+    CHECK(this->param_.step_lr_size() == 0 ||
+          this->param_.step_lr_size() == this->param_.stepvalue_size())
+      << "The number of lr values must match the number of steps.";
+    if (this->param_.step_lr_size() > 0) {
+      Dtype previous_lr, next_lr;
+      if (this->current_step_ >= this->param_.step_lr_size()) {
+        previous_lr = this->param_.step_lr(this->param_.step_lr_size() - 1);
+        next_lr = previous_lr;
+      } else if (this->current_step_ > 0) {
+        previous_lr = this->param_.step_lr(this->current_step_ - 1);
+        next_lr = this->param_.step_lr(this->current_step_);
+      } else {
+        previous_lr = this->param_.base_lr();
+        next_lr = this->param_.step_lr(this->current_step_);
+      }
+      if (this->current_step_ < this->param_.step_policy_size() && 
+          this->param_.step_policy(this->current_step_) == "linear") {
+        const int previous_step = this->current_step_ > 0 ?
+          this->param_.stepvalue(this->current_step_ - 1) :
+          0;
+        const int next_step = this->param_.stepvalue(this->current_step_);
+        const Dtype alpha = Dtype(this->iter_ - previous_step) / Dtype(next_step - previous_step);
+        rate = previous_lr * (1 - alpha) + next_lr * alpha;
+      } else {
+        rate = previous_lr;
+      }
+    } else {
+      rate = this->param_.base_lr() *
+          pow(this->param_.gamma(), this->current_step_);
+    }
   } else if (lr_policy == "poly") {
     rate = this->param_.base_lr() * pow(Dtype(1.) -
         (Dtype(this->iter_) / Dtype(this->param_.max_iter())),
@@ -147,59 +175,120 @@ void SGDSolver<Dtype>::Regularize(int param_id) {
   const vector<float>& net_params_weight_decay =
       this->net_->params_weight_decay();
   Dtype weight_decay = this->param_.weight_decay();
-  string regularization_type = this->param_.regularization_type();
+  string global_regularization_type = this->param_.regularization_type();
   Dtype local_decay = weight_decay * net_params_weight_decay[param_id];
-  switch (Caffe::mode()) {
-  case Caffe::CPU: {
-    if (local_decay) {
-      if (regularization_type == "L2") {
-        // add weight decay
-        caffe_axpy(net_params[param_id]->count(),
-            local_decay,
-            net_params[param_id]->cpu_data(),
-            net_params[param_id]->mutable_cpu_diff());
-      } else if (regularization_type == "L1") {
-        caffe_cpu_sign(net_params[param_id]->count(),
-            net_params[param_id]->cpu_data(),
-            temp_[param_id]->mutable_cpu_data());
-        caffe_axpy(net_params[param_id]->count(),
-            local_decay,
-            temp_[param_id]->cpu_data(),
-            net_params[param_id]->mutable_cpu_diff());
-      } else {
-        LOG(FATAL) << "Unknown regularization type: " << regularization_type;
-      }
-    }
-    break;
+  const bool is_logspace = this->net_->params_is_logspace()[param_id];
+  const vector<string>& local_reg_types = this->net_->params_local_reg_type()[param_id];
+  vector<string> reg_types;
+  if (local_reg_types.size() > 0) {
+    reg_types = local_reg_types;
+  } else {
+    reg_types.resize(1);
+    reg_types[0] = global_regularization_type;
   }
-  case Caffe::GPU: {
-#ifndef CPU_ONLY
-    if (local_decay) {
-      if (regularization_type == "L2") {
-        // add weight decay
-        caffe_gpu_axpy(net_params[param_id]->count(),
-            local_decay,
-            net_params[param_id]->gpu_data(),
-            net_params[param_id]->mutable_gpu_diff());
-      } else if (regularization_type == "L1") {
-        caffe_gpu_sign(net_params[param_id]->count(),
-            net_params[param_id]->gpu_data(),
-            temp_[param_id]->mutable_gpu_data());
-        caffe_gpu_axpy(net_params[param_id]->count(),
-            local_decay,
-            temp_[param_id]->gpu_data(),
-            net_params[param_id]->mutable_gpu_diff());
-      } else {
-        LOG(FATAL) << "Unknown regularization type: " << regularization_type;
+  for (int i=0; i < reg_types.size(); ++i) {
+    const string regularization_type = reg_types[i];
+    switch (Caffe::mode()) {
+    case Caffe::CPU: {
+      if (local_decay) {
+        if (regularization_type == "L2") {
+          if (!is_logspace) {
+            // add weight decay
+            caffe_axpy(net_params[param_id]->count(),
+                local_decay,
+                net_params[param_id]->cpu_data(),
+                net_params[param_id]->mutable_cpu_diff());
+          } else {
+            caffe_cpu_logspace_l2<Dtype>(
+                net_params[param_id]->count(),
+                local_decay,
+                net_params[param_id]->cpu_data(),
+                net_params[param_id]->mutable_cpu_diff());
+          }
+        } else if (regularization_type == "L1") {
+          caffe_cpu_sign(net_params[param_id]->count(),
+              net_params[param_id]->cpu_data(),
+              temp_[param_id]->mutable_cpu_data());
+          caffe_axpy(net_params[param_id]->count(),
+              local_decay,
+              temp_[param_id]->cpu_data(),
+              net_params[param_id]->mutable_cpu_diff());
+        } else if (regularization_type == "L2_Smoothing") {
+          if (!is_logspace) {
+            caffe_cpu_l2_smoothing<Dtype>(
+                net_params[param_id]->count(),
+                net_params[param_id]->shape(-1),
+                local_decay,
+                net_params[param_id]->cpu_data(),
+                net_params[param_id]->mutable_cpu_diff());
+          } else {
+            caffe_cpu_logspace_l2_smoothing<Dtype>(
+                net_params[param_id]->count(),
+                net_params[param_id]->shape(-1),
+                local_decay,
+                net_params[param_id]->cpu_data(),
+                net_params[param_id]->mutable_cpu_diff());
+          }
+        } else {
+          LOG(FATAL) << "Unknown regularization type: " << regularization_type;
+        }
       }
+      break;
     }
-#else
-    NO_GPU;
-#endif
-    break;
-  }
-  default:
-    LOG(FATAL) << "Unknown caffe mode: " << Caffe::mode();
+    case Caffe::GPU: {
+  #ifndef CPU_ONLY
+      if (local_decay) {
+        if (regularization_type == "L2") {
+          if (!is_logspace) {
+            // add weight decay
+            caffe_gpu_axpy(net_params[param_id]->count(),
+                local_decay,
+                net_params[param_id]->gpu_data(),
+                net_params[param_id]->mutable_gpu_diff());
+          } else {
+            caffe_gpu_logspace_l2<Dtype>(
+                net_params[param_id]->count(),
+                local_decay,
+                net_params[param_id]->gpu_data(),
+                net_params[param_id]->mutable_gpu_diff());
+          }
+
+        } else if (regularization_type == "L1") {
+          caffe_gpu_sign(net_params[param_id]->count(),
+              net_params[param_id]->gpu_data(),
+              temp_[param_id]->mutable_gpu_data());
+          caffe_gpu_axpy(net_params[param_id]->count(),
+              local_decay,
+              temp_[param_id]->gpu_data(),
+              net_params[param_id]->mutable_gpu_diff());
+        } else if (regularization_type == "L2_Smoothing") {
+          if (!is_logspace) {
+            caffe_gpu_l2_smoothing<Dtype>(
+                net_params[param_id]->count(),
+                net_params[param_id]->shape(-1),
+                local_decay,
+                net_params[param_id]->gpu_data(),
+                net_params[param_id]->mutable_gpu_diff());
+          } else {
+            caffe_gpu_logspace_l2_smoothing<Dtype>(
+                net_params[param_id]->count(),
+                net_params[param_id]->shape(-1),
+                local_decay,
+                net_params[param_id]->gpu_data(),
+                net_params[param_id]->mutable_gpu_diff());
+          }
+        } else {
+          LOG(FATAL) << "Unknown regularization type: " << regularization_type;
+        }
+      }
+  #else
+      NO_GPU;
+  #endif
+      break;
+    }
+    default:
+      LOG(FATAL) << "Unknown caffe mode: " << Caffe::mode();
+    }
   }
 }
 
@@ -263,6 +352,8 @@ void SGDSolver<Dtype>::SnapshotSolverStateToBinaryProto(
   state.set_iter(this->iter_);
   state.set_learned_net(model_filename);
   state.set_current_step(this->current_step_);
+  state.set_current_stage_iter(this->current_stage_iter_);
+  state.set_current_stage_idx(this->current_stage_idx_);
   state.clear_history();
   for (int i = 0; i < history_.size(); ++i) {
     // Add history
@@ -307,6 +398,8 @@ void SGDSolver<Dtype>::RestoreSolverStateFromBinaryProto(
   SolverState state;
   ReadProtoFromBinaryFile(state_file, &state);
   this->iter_ = state.iter();
+  this->current_stage_iter_ = state.current_stage_iter();
+  this->current_stage_idx_ = state.current_stage_idx();
   if (state.has_learned_net()) {
     NetParameter net_param;
     ReadNetParamsFromBinaryFileOrDie(state.learned_net().c_str(), &net_param);

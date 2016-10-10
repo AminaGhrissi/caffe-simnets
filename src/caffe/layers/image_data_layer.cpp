@@ -14,6 +14,10 @@
 #include "caffe/util/io.hpp"
 #include "caffe/util/math_functions.hpp"
 #include "caffe/util/rng.hpp"
+#include <boost/thread.hpp>
+
+#define MAX_RETRIES (15)
+#define WAIT_TIME_IN_SECONDS (30)
 
 namespace caffe {
 
@@ -29,6 +33,7 @@ void ImageDataLayer<Dtype>::DataLayerSetUp(const vector<Blob<Dtype>*>& bottom,
   const int new_width  = this->layer_param_.image_data_param().new_width();
   const bool is_color  = this->layer_param_.image_data_param().is_color();
   string root_folder = this->layer_param_.image_data_param().root_folder();
+  use_cache_ = this->layer_param_.image_data_param().cache_images();
 
   CHECK((new_height == 0 && new_width == 0) ||
       (new_height > 0 && new_width > 0)) << "Current implementation requires "
@@ -62,8 +67,16 @@ void ImageDataLayer<Dtype>::DataLayerSetUp(const vector<Blob<Dtype>*>& bottom,
     lines_id_ = skip;
   }
   // Read an image, and use it to initialize the top blob.
-  cv::Mat cv_img = ReadImageToCVMat(root_folder + lines_[lines_id_].first,
+  int retries = 0;
+  cv::Mat cv_img;
+  while (!cv_img.data && retries < MAX_RETRIES) {
+    cv_img = ReadImageToCVMat(root_folder + lines_[lines_id_].first,
                                     new_height, new_width, is_color);
+    ++retries;
+    if (!cv_img.data) {
+      boost::this_thread::sleep(boost::posix_time::seconds(WAIT_TIME_IN_SECONDS));
+    }
+  }
   CHECK(cv_img.data) << "Could not load " << lines_[lines_id_].first;
   // Use data_transformer to infer the expected blob shape from a cv_image.
   vector<int> top_shape = this->data_transformer_->InferBlobShape(cv_img);
@@ -114,8 +127,24 @@ void ImageDataLayer<Dtype>::load_batch(Batch<Dtype>* batch) {
 
   // Reshape according to the first image of each batch
   // on single input batches allows for inputs of varying dimension.
-  cv::Mat cv_img = ReadImageToCVMat(root_folder + lines_[lines_id_].first,
-      new_height, new_width, is_color);
+  cv::Mat cv_img;
+  std::string img_filename = root_folder + lines_[lines_id_].first;
+  if (use_cache_ && cache_.count(img_filename) > 0) {
+    cv_img = cache_[img_filename];
+  } else {
+    int retries = 0;
+    while (!cv_img.data && retries < MAX_RETRIES) {
+      cv_img = ReadImageToCVMat(img_filename,
+                                new_height, new_width, is_color);
+      ++retries;
+      if (!cv_img.data) {
+        boost::this_thread::sleep(boost::posix_time::seconds(WAIT_TIME_IN_SECONDS));
+      }
+    }
+    if (use_cache_ && cv_img.data) {
+      cache_[img_filename] = cv_img;
+    }
+  }
   CHECK(cv_img.data) << "Could not load " << lines_[lines_id_].first;
   // Use data_transformer to infer the expected blob shape from a cv_img.
   vector<int> top_shape = this->data_transformer_->InferBlobShape(cv_img);
@@ -133,8 +162,24 @@ void ImageDataLayer<Dtype>::load_batch(Batch<Dtype>* batch) {
     // get a blob
     timer.Start();
     CHECK_GT(lines_size, lines_id_);
-    cv::Mat cv_img = ReadImageToCVMat(root_folder + lines_[lines_id_].first,
-        new_height, new_width, is_color);
+    cv::Mat cv_img;
+    std::string img_filename = root_folder + lines_[lines_id_].first;
+    if (use_cache_ && cache_.count(img_filename) > 0) {
+      cv_img = cache_[img_filename];
+    } else {
+      int retries = 0;
+      while (!cv_img.data && retries < MAX_RETRIES) {
+        cv_img = ReadImageToCVMat(img_filename,
+                                  new_height, new_width, is_color);
+        ++retries;
+        if (!cv_img.data) {
+          boost::this_thread::sleep(boost::posix_time::seconds(WAIT_TIME_IN_SECONDS));
+        }
+      }
+      if (use_cache_ && cv_img.data) {
+        cache_[img_filename] = cv_img;
+      }
+    }
     CHECK(cv_img.data) << "Could not load " << lines_[lines_id_].first;
     read_time += timer.MicroSeconds();
     timer.Start();

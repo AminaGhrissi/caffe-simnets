@@ -143,6 +143,72 @@ class AdamSolver : public SGDSolver<Dtype> {
   DISABLE_COPY_AND_ASSIGN(AdamSolver);
 };
 
+/**
+ * @brief SMORMS3 Solver, an algorithm for first-order gradient-based optimization
+ *        of stochastic objective functions, taken from the blog post:
+ *    http://sifter.org/~simon/journal/20150420.html
+ */
+template <typename Dtype>
+class SMORMS3Solver : public SGDSolver<Dtype> {
+ public:
+  explicit SMORMS3Solver(const SolverParameter& param)
+      : SGDSolver<Dtype>(param) { SMORMS3PreSolve();}
+  explicit SMORMS3Solver(const string& param_file)
+      : SGDSolver<Dtype>(param_file) { SMORMS3PreSolve(); }
+  virtual inline const char* type() const { return "SMORMS3"; }
+
+ protected:
+  void SMORMS3PreSolve();
+  virtual void ComputeUpdateValue(int param_id, Dtype rate);
+
+  DISABLE_COPY_AND_ASSIGN(SMORMS3Solver);
+};
+
+/**
+ * @brief DirectionalAdamSolver, an algorithm for first-order gradient-based optimization
+ *        of stochastic objective functions, based on ADAM, but modify it to preserve
+ *        the direction of sub-groups in the data.
+ *
+ */
+template <typename Dtype>
+class DirectionalAdamSolver : public SGDSolver<Dtype> {
+ public:
+  explicit DirectionalAdamSolver(const SolverParameter& param)
+      : SGDSolver<Dtype>(param) { DirectionalAdamPreSolve();}
+  explicit DirectionalAdamSolver(const string& param_file)
+      : SGDSolver<Dtype>(param_file) { DirectionalAdamPreSolve(); }
+  virtual inline const char* type() const { return "DirectionalAdam"; }
+
+ protected:
+  void DirectionalAdamPreSolve();
+  virtual void ComputeUpdateValue(int param_id, Dtype rate);
+
+  DISABLE_COPY_AND_ASSIGN(DirectionalAdamSolver);
+};
+
+/**
+ * @brief NadamSolver, an algorithm for first-order gradient-based optimization
+ *        of stochastic objective functions, a hybrid of ADAM and Nesterov.
+ *
+ * [1] Timothy Dozat, "INCORPORATING NESTEROV MOMENTUM INTO ADAM."
+ *     ICLR 2016 Workshop.
+ */
+template <typename Dtype>
+class NadamSolver : public SGDSolver<Dtype> {
+ public:
+  explicit NadamSolver(const SolverParameter& param)
+      : SGDSolver<Dtype>(param) { NadamPreSolve();}
+  explicit NadamSolver(const string& param_file)
+      : SGDSolver<Dtype>(param_file) { NadamPreSolve(); }
+  virtual inline const char* type() const { return "Nadam"; }
+
+ protected:
+  void NadamPreSolve();
+  virtual void ComputeUpdateValue(int param_id, Dtype rate);
+
+  DISABLE_COPY_AND_ASSIGN(NadamSolver);
+};
+
 }  // namespace caffe
 
 #endif  // CAFFE_SGD_SOLVERS_HPP_

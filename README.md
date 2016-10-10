@@ -1,6 +1,13 @@
-# Caffe
+# The SimNets Architecture's Implementation in Caffe
 
-[![Build Status](https://travis-ci.org/BVLC/caffe.svg?branch=master)](https://travis-ci.org/BVLC/caffe)
+This is the official implementation of the SimNets Architecture, as featured in the articles:
+* [SimNets: A Generalization of Convolutional Networks](https://arxiv.org/abs/1410.0781). Nadav Cohen and Amnon Shashua. NIPS 2014 Deep Learning Workshop.
+* [Deep SimNets](http://www.cv-foundation.org/openaccess/content_cvpr_2016/html/Cohen_Deep_SimNets_CVPR_2016_paper.html). Nadav Cohen, Or Sharir and Amnon Shashua. CVPR 2016.
+
+Our implementation is based on the Caffe framework. The rest of the README is taken from the original repository.
+
+---
+
 [![License](https://img.shields.io/badge/license-BSD-blue.svg)](LICENSE)
 
 Caffe is a deep learning framework made with expression, speed, and modularity in mind.

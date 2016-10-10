@@ -65,6 +65,16 @@ private:\
   INSTANTIATE_LAYER_GPU_FORWARD(classname); \
   INSTANTIATE_LAYER_GPU_BACKWARD(classname)
 
+#define INSTANTIATE_LAYER_GPU_INIT_STEP(classname) \
+  template bool classname<float>::init_step_gpu( \
+      const std::vector<Blob<float>*>& bottom, float* objective); \
+  template bool classname<double>::init_step_gpu( \
+      const std::vector<Blob<double>*>& bottom, double* objective); \
+  template float classname<float>::test_init_step_objective_gpu( \
+      const std::vector<Blob<float>*>& bottom); \
+  template double classname<double>::test_init_step_objective_gpu( \
+      const std::vector<Blob<double>*>& bottom);
+
 // A simple macro to mark codes that are not implemented, so that when the code
 // is executed we will see a fatal log.
 #define NOT_IMPLEMENTED LOG(FATAL) << "Not Implemented Yet"
