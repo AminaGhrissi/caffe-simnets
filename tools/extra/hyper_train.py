@@ -381,12 +381,12 @@ class TrainPlan():
                     weights_file = self._weights_file
                     if weights_file is not None:
                         weights_file_glob = self._templateGenerator.from_string(self._weights_file).render(params_dict)
-                        weights_files = glob.glob('%s/%s' % (directory, weights_file_glob))
+                        weights_files = glob.glob(os.path.normpath(os.path.join(directory, weights_file_glob)))
                         weights_files.sort(key=os.path.getmtime)
                         if len(weights_files) == 0:
                             self._print('Cannot find weights file. Skipped run!')
                             break
-                        weights_file = '/'.join(weights_files[-1].split('/')[1:])
+                        weights_file = weights_files[-1]
                     description = ('i: %s | ' % indices_str) + ' | '.join(sorted(map(lambda x: '{}: {}'.format(x[0], ensure_precision(x[1], 4)), params)))
                     solve_state, run_params = self._solve(params_dict['name'], description, net, weights_file, gpu_id)
                     if solve_state == TrainPlan.EXISTS:
@@ -572,7 +572,7 @@ class TrainPlan():
             self._loss_history = []
             cmd = "%s train -solver=%s" % (LOCAL_CAFFE_EXEC, prototxt)
             if weights_file is not None:
-                cmd += " -weights=%s" % (os.path.join(os.path.dirname(prototxt), weights_file))
+                cmd += " -weights=%s" % weights_file
             if gpu is not None:
                 cmd += " -gpu=%s" % (str(gpu))
             
