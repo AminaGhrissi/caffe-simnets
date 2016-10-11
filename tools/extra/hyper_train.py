@@ -11,6 +11,9 @@ from curtsies import CursorAwareWindow, Input, events, fmtstr, FSArray, fsarray
 from curtsies.fmtfuncs import *
 import platform
 
+SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
+LOCAL_CAFFE_EXEC = os.path.abspath(os.path.join(SCRIPT_DIR, '../../build/tools/caffe'))
+
 def error(error_message):
     print error_message
     print """Try `python hyper_train.py --help` for more information"""
@@ -317,7 +320,8 @@ class TrainPlan():
         return self._name
 
     def execute(self, template_net, gpu_id=None):
-        directory = self.name()
+        directory = os.path.abspath(self.name())
+        base_name = os.path.normpath(self.name()).replace('/', '_')
         try:
             os.makedirs(directory)
         except OSError:
@@ -349,7 +353,7 @@ class TrainPlan():
             if other_template != template_net:
                 error('The net template in target directory is different than the input template.')
 
-        unique_csv_file = '%s/%s_unique%s.csv' % (directory, self.name(), semi_unique())
+        unique_csv_file = '%s/%s_unique%s.csv' % (directory, base_name, semi_unique())
         all_keys = set()
         update_csv_interval = random.randint(3,7)
         iterations_since_update = 0
@@ -372,7 +376,7 @@ class TrainPlan():
                 params.extend(list(itertools.imap(lambda x: ('run_idx_%d' % x[0], x[1]), enumerate(indices,1))))
                 while True:
                     params_dict = dict(params)
-                    base_filename = '%s/%s_%s' % (directory, self.name(), indices_str)
+                    base_filename = '%s/%s_%s' % (directory, base_name, indices_str)
                     params_dict['name'] = base_filename
                     if not params_dict.has_key('caffe_random_seed'):
                         params_dict['caffe_random_seed'] = random.randint(0, 0xffffffff)
@@ -406,7 +410,7 @@ class TrainPlan():
                         writer.writerows(self._runs_history)
                     iterations_since_update += 1
                     if iterations_since_update > update_csv_interval:
-                        self._update_main_csv(directory)
+                        self._update_main_csv(directory, base_name)
                         iterations_since_update = 0
                     if solve_state == TrainPlan.CAFFE_TERMINATED:
                         ans = ''
@@ -435,8 +439,8 @@ class TrainPlan():
             self._inside_window_context = False
         self._last_reprint = None
         self._window_context = None
-        self._update_main_csv(directory)
-    def _update_main_csv(self, directory):
+        self._update_main_csv(directory, base_name)
+    def _update_main_csv(self, directory, base_name):
         regex = re.compile('.*_unique[0-9]+\.csv$')
         all_keys = set()
         rows = []
@@ -450,7 +454,7 @@ class TrainPlan():
             except:
                 pass
         all_keys = sorted(all_keys)
-        with open('%s/%s.csv' % (directory, self.name()), 'wb') as outcsv:
+        with open('%s/%s.csv' % (directory, base_name), 'wb') as outcsv:
             writer = csv.DictWriter(outcsv, fieldnames=all_keys)
             writer.writeheader()
             writer.writerows(rows)
@@ -573,7 +577,7 @@ class TrainPlan():
             f.write(net)
         with open(logfile, 'wb') as f:
             self._loss_history = []
-            cmd = "caffe train -solver=%s" % (prototxt)
+            cmd = "%s train -solver=%s" % (LOCAL_CAFFE_EXEC, prototxt)
             if weights_file is not None:
                 cmd += " -weights=%s" % (os.path.join(os.path.dirname(prototxt), weights_file))
             if gpu is not None:
