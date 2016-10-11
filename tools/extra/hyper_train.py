@@ -11,13 +11,16 @@ from curtsies import CursorAwareWindow, Input, events, fmtstr, FSArray, fsarray
 from curtsies.fmtfuncs import *
 import platform
 
-SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
-LOCAL_CAFFE_EXEC = os.path.abspath(os.path.join(SCRIPT_DIR, '../../build/tools/caffe'))
-
 def error(error_message):
     print error_message
     print """Try `python hyper_train.py --help` for more information"""
     sys.exit(2)
+
+SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
+LOCAL_CAFFE_EXEC = os.path.abspath(os.path.join(SCRIPT_DIR, '../../build/tools/caffe'))
+
+if not os.path.isfile(LOCAL_CAFFE_EXEC):
+    error("Caffe's executable couldn't be found. Make sure Caffe was compiled successfully.")
 
 def subprocess_lines_iterator(p, output='stdout'):
     while True:
