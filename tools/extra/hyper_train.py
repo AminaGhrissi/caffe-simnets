@@ -330,16 +330,6 @@ class TrainPlan():
         except OSError:
             if not os.path.isdir(directory):
                 raise
-
-        script_file = os.path.join(directory, 'train.py')
-        if not os.path.isfile(script_file):
-            with open(script_file, 'wb') as f:
-                f.write(exec_script)
-            try:
-                subprocess.call('chmod +x %s' % script_file, shell=True)
-            except:
-                pass
-
         target_train_plan = os.path.join(directory, 'train_plan.json')
         if not os.path.isfile(target_train_plan):
             shutil.copyfile(self._train_plan_filename, target_train_plan)
