@@ -3,8 +3,11 @@
 This is the official implementation of the SimNets Architecture, as featured in the articles:
 * [SimNets: A Generalization of Convolutional Networks](https://arxiv.org/abs/1410.0781). Nadav Cohen and Amnon Shashua. NIPS 2014 Deep Learning Workshop.
 * [Deep SimNets](http://www.cv-foundation.org/openaccess/content_cvpr_2016/html/Cohen_Deep_SimNets_CVPR_2016_paper.html). Nadav Cohen, Or Sharir and Amnon Shashua. CVPR 2016.
+* [Tensorial Mixture Models](https://arxiv.org/abs/1610.04167). Or Sharir, Ronen Tamari, Nadav Cohen and Amnon Shashua. arXiv preprint. October, 2016.
 
-Our implementation is based on the Caffe framework. The rest of the README is taken from the original repository.
+Our implementation is based on the Caffe framework. If you have already installed Caffe, then it is typically enough to just copy over your Makefile.config to this project, and run `make all`. You can find examples on how to use the SimNets architecture in the [experiments repository of our new article: "Tensorial Mixture Models"](https://github.com/HUJI-Deep/TMM).
+
+The rest of the README is taken from the original repository.
 
 ---
 
